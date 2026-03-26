@@ -25,20 +25,58 @@ class WACSAAPIClient:
         self.session.timeout = config.timeout
         self.auth_token = None
         
-    def set_auth_token(self, token: str):
-        """Set authentication token"""
-        self.auth_token = token
-        self.session.headers.update({
-            'Authorization': f'Bearer {token}',
-            'Content-Type': 'application/json'
-        })
-        
-    def _make_request(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
-        """Make HTTP request to API"""
-        url = f"{self.config.base_url.rstrip('/')}/{endpoint.lstrip('/')}"
+    def login(self, email: str, password: str) -> Dict[str, Any]:
+        """Login to WACSA-MD2 and get token"""
+        url = f"{self.config.base_url.rstrip('/')}/auth/login"
+        data = {"email": email, "password": password}
+        headers = {'Content-Type': 'application/json'}
         
         try:
-            response = self.session.request(method, url, **kwargs)
+            response = self.session.post(url, json=data, headers=headers)
+            response.raise_for_status()
+            result = response.json()
+            
+            if result.get('status'):
+                # Extract token from login response
+                # Note: WACSA might return token differently, adjust accordingly
+                return result
+            else:
+                raise Exception(result.get('message', 'Login failed'))
+                
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Login failed: {e}")
+            raise
+            
+    def set_token(self, token: str):
+        """Set authentication token"""
+        self.auth_token = token
+        self.session.headers.update({'x-access-token': token})
+        
+    def _make_request(self, method, endpoint, data=None, params=None):
+        """Make HTTP request to WACSA-MD2 API"""
+        url = f"{self.config.base_url.rstrip('/')}/{endpoint.lstrip('/')}"
+        headers = {
+            'Content-Type': 'application/json'
+        }
+        
+        # Add token if available
+        if self.auth_token:
+            headers['x-access-token'] = self.auth_token
+            
+        try:
+            response = self.session.request(method, url, headers=headers, data=data, params=params)
+            
+            # Handle authentication errors
+            if response.status_code == 403:
+                logger.error("Authentication failed: Token tidak tercantum")
+                raise Exception("Authentication failed: Please login first")
+            elif response.status_code == 401:
+                logger.error("Authentication failed: Token salah")
+                raise Exception("Authentication failed: Invalid token")
+            elif response.status_code == 404:
+                logger.error(f"Endpoint not found: {endpoint}")
+                raise Exception(f"Endpoint not found: {endpoint}")
+                
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
@@ -46,10 +84,33 @@ class WACSAAPIClient:
             raise
             
     def health_check(self) -> Dict[str, Any]:
-        """Check server health"""
-        return self._make_request("GET", "health")
+        """Check server health - use statistic endpoint as health check"""
+        try:
+            return self.get_statistics()
+        except:
+            # If statistic fails, try received message
+            try:
+                return self.get_received_messages()
+            except:
+                return {"status": "offline", "message": "Server not accessible"}
         
-    # WACSA Log Endpoints (Based on log-behavior-analysis.md)
+    def get_whatsapp_status(self) -> Dict[str, Any]:
+        """Get WhatsApp connection status - use statistic as status check"""
+        try:
+            stats = self.get_statistics()
+            return {"status": "connected", "data": stats}
+        except Exception as e:
+            return {"status": "disconnected", "error": str(e)}
+        
+    def send_text_message(self, phone: str, message: str) -> Dict[str, Any]:
+        """Send WhatsApp text message using /message/send-text"""
+        data = {
+            "phone": phone,
+            "message": message
+        }
+        return self._make_request("POST", "message/send-text", json=data)
+        
+    # WACSA Log Endpoints (Based on actual WACSA-MD2 implementation)
     def get_received_messages(self) -> Dict[str, Any]:
         """
         Get received messages from WACSA log
@@ -73,19 +134,6 @@ class WACSAAPIClient:
         Endpoint: GET /log/statistic
         """
         return self._make_request("GET", "log/statistic")
-        
-    # WhatsApp API Methods
-    def get_whatsapp_status(self) -> Dict[str, Any]:
-        """Get WhatsApp connection status"""
-        return self._make_request("GET", "whatsapp/status")
-        
-    def send_text_message(self, phone: str, message: str) -> Dict[str, Any]:
-        """Send WhatsApp text message using /message/send-text"""
-        data = {
-            "phone": phone,
-            "message": message
-        }
-        return self._make_request("POST", "message/send-text", json=data)
         
     def send_media_message(self, phone: str, media_file: str, caption: str = "") -> Dict[str, Any]:
         """Send WhatsApp media message using /message/send-media"""
