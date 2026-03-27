@@ -203,13 +203,13 @@ class MainWindow(ctk.CTk):
         self.resize_handle = ctk.CTkFrame(self.chat_container, width=6, fg_color="#E5E7EB", cursor="sb_h_double_arrow")
         self.resize_handle.place(x=280, y=0, relheight=1.0)
         # Drag zone overlay (lebih lebar, menyatu dengan area scrollbar)
-        self.drag_zone_width = 24
+        self.drag_zone_width = 4
         self.drag_zone = ctk.CTkFrame(self.chat_list_frame, width=self.drag_zone_width, fg_color="#D1D5DB", cursor="sb_h_double_arrow")
         self.drag_zone.place(relx=1.0, rely=0.0, anchor="ne", relheight=1.0)
         self.drag_zone.lift()
         
         # Chat view (right side)
-        self.chat_view = ChatView(self.chat_container, on_send_message=self.handle_send_message)
+        self.chat_view = ChatView(self.chat_container, on_send_message=self.handle_send_message, on_send_media=self.handle_send_media)
         self.chat_view.pack(side="left", fill="both", expand=True)
         
         # Make chat list resizable
@@ -1090,6 +1090,28 @@ class MainWindow(ctk.CTk):
             error_msg = str(e)
             self.update_status(f"✗ Error: {error_msg}")
             messagebox.showerror("Send Error", f"Failed to send message:\n\n{error_msg}")
+    
+    def handle_send_media(self, phone, file_path, caption=""):
+        """Handle sending media message"""
+        try:
+            self.update_status(f"Sending media to {phone}...")
+            
+            # Send via API with caption
+            result = self.api_client.send_media_message(phone, file_path, caption)
+            
+            if result.get('status'):
+                self.update_status("✓ Media sent successfully")
+                # Refresh messages to show the sent message
+                self.refresh_messages()
+            else:
+                error_msg = result.get('response', 'Unknown error')
+                self.update_status("✗ Failed to send media")
+                messagebox.showerror("Send Error", f"Failed to send media:\n\n{error_msg}")
+                
+        except Exception as e:
+            error_msg = str(e)
+            self.update_status(f"✗ Error: {error_msg}")
+            messagebox.showerror("Send Error", f"Failed to send media:\n\n{error_msg}")
     
     def toggle_sidebar(self):
         """Toggle sidebar visibility"""

@@ -5,6 +5,11 @@ WhatsApp-like conversation view with message bubbles
 
 import customtkinter as ctk
 from tkinter import filedialog
+try:
+    from PIL import Image, ImageTk
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
 import sys
 import os
 
@@ -16,10 +21,11 @@ from src.ui.components.message_bubble import MessageBubble, DateSeparator
 class ChatView(ctk.CTkFrame):
     """Chat conversation view component"""
     
-    def __init__(self, parent, on_send_message=None):
+    def __init__(self, parent, on_send_message=None, on_send_media=None):
         super().__init__(parent)
         
         self.on_send_message = on_send_message
+        self.on_send_media = on_send_media
         self.current_contact = None
         self.messages = []
         
@@ -282,17 +288,264 @@ class ChatView(ctk.CTkFrame):
         self.messages_frame._parent_canvas.yview_moveto(1.0)
         
     def attach_media(self):
-        """Attach media file"""
+        """Attach media file - show preview dialog like WhatsApp"""
         file_path = filedialog.askopenfilename(
             title="Select Media File",
             filetypes=[
-                ("Images", "*.png *.jpg *.jpeg *.gif"),
-                ("Videos", "*.mp4 *.avi *.mov"),
-                ("Documents", "*.pdf *.doc *.docx"),
+                ("Images", "*.png *.jpg *.jpeg *.gif *.bmp *.webp"),
+                ("Videos", "*.mp4 *.avi *.mov *.mkv"),
+                ("Documents", "*.pdf *.doc *.docx *.txt"),
                 ("All Files", "*.*")
             ]
         )
         
-        if file_path:
-            # TODO: Handle media upload
-            print(f"Selected file: {file_path}")
+        if file_path and self.current_contact:
+            self.show_media_preview(file_path)
+    
+    def show_media_preview(self, file_path):
+        """Show media preview dialog with caption input - WhatsApp style"""
+        # Create overlay frame (dark gray semi-transparent look)
+        self.preview_overlay = ctk.CTkFrame(self, fg_color="#1a1a2e")
+        self.preview_overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self.preview_overlay.lift()
+        
+        # Preview container - larger size like WhatsApp
+        preview_container = ctk.CTkFrame(self.preview_overlay, fg_color="#111B21", corner_radius=20, width=500, height=450)
+        preview_container.place(relx=0.5, rely=0.45, anchor="center")
+        preview_container.pack_propagate(False)
+        
+        # Header
+        header = ctk.CTkFrame(preview_container, fg_color="#202C33", height=55, corner_radius=20)
+        header.pack(fill="x", padx=0, pady=0)
+        header.pack_propagate(False)
+        
+        ctk.CTkLabel(
+            header,
+            text="Send to " + self.current_contact.get('name', 'Unknown'),
+            font=ctk.CTkFont(size=15, weight="bold"),
+            text_color="white"
+        ).pack(side="left", padx=20, pady=15)
+        
+        # Close button
+        close_btn = ctk.CTkButton(
+            header,
+            text="✕",
+            width=35,
+            height=35,
+            font=ctk.CTkFont(size=16),
+            fg_color="transparent",
+            hover_color="#374151",
+            command=self.close_media_preview
+        )
+        close_btn.pack(side="right", padx=15, pady=10)
+        
+        # Media preview area - larger
+        media_frame = ctk.CTkFrame(preview_container, fg_color="#0B141A", corner_radius=15)
+        media_frame.pack(fill="both", expand=True, padx=20, pady=15)
+        
+        # Try to show image preview
+        try:
+            ext = os.path.splitext(file_path)[1].lower()
+            image_exts = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp']
+            
+            if ext in image_exts:
+                try:
+                    # Use PyQt5 for image display
+                    from PyQt5.QtWidgets import QApplication, QDialog, QVBoxLayout, QLabel, QPushButton, QHBoxLayout, QLineEdit
+                    from PyQt5.QtGui import QPixmap
+                    from PyQt5.QtCore import Qt
+                    import sys
+                    
+                    # Create QApplication if not exists
+                    qt_app = QApplication.instance()
+                    if qt_app is None:
+                        qt_app = QApplication(sys.argv)
+                    
+                    # Create preview dialog
+                    dialog = QDialog()
+                    dialog.setWindowTitle(f"Send to {self.current_contact.get('name', 'Unknown')}")
+                    dialog.setMinimumSize(500, 450)
+                    dialog.setStyleSheet("""
+                        QDialog {
+                            background-color: #111B21;
+                        }
+                        QPushButton {
+                            background-color: #00A884;
+                            color: white;
+                            border: none;
+                            border-radius: 20px;
+                            padding: 10px 20px;
+                            font-size: 14px;
+                        }
+                        QPushButton:hover {
+                            background-color: #008F72;
+                        }
+                        QLineEdit {
+                            background-color: #202C33;
+                            color: white;
+                            border: 1px solid #374151;
+                            border-radius: 8px;
+                            padding: 10px;
+                            font-size: 14px;
+                        }
+                        QLabel {
+                            color: white;
+                        }
+                    """)
+                    
+                    layout = QVBoxLayout(dialog)
+                    layout.setSpacing(15)
+                    layout.setContentsMargins(20, 20, 20, 20)
+                    
+                    # Image label
+                    img_label = QLabel()
+                    pixmap = QPixmap(file_path)
+                    
+                    # Scale to fit
+                    max_width = 450
+                    max_height = 300
+                    scaled_pixmap = pixmap.scaled(max_width, max_height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    img_label.setPixmap(scaled_pixmap)
+                    img_label.setAlignment(Qt.AlignCenter)
+                    layout.addWidget(img_label)
+                    
+                    # Caption input
+                    caption_input = QLineEdit()
+                    caption_input.setPlaceholderText("Add a caption...")
+                    layout.addWidget(caption_input)
+                    
+                    # Buttons
+                    btn_layout = QHBoxLayout()
+                    
+                    close_btn = QPushButton("Cancel")
+                    close_btn.setStyleSheet("background-color: #374151;")
+                    close_btn.clicked.connect(dialog.reject)
+                    btn_layout.addWidget(close_btn)
+                    
+                    send_btn = QPushButton("Send")
+                    send_btn.clicked.connect(dialog.accept)
+                    btn_layout.addWidget(send_btn)
+                    
+                    layout.addLayout(btn_layout)
+                    
+                    # Show dialog
+                    result = dialog.exec_()
+                    
+                    if result == QDialog.Accepted:
+                        # Get caption and send
+                        caption = caption_input.text().strip()
+                        if self.current_contact and self.on_send_media:
+                            phone = self.current_contact.get('number', self.current_contact.get('phone', ''))
+                            self.on_send_media(phone, file_path, caption)
+                    
+                    # Don't show the customtkinter preview since we used PyQt5
+                    self.preview_overlay.destroy()
+                    delattr(self, 'preview_overlay')
+                    return
+                    
+                except Exception as qt_err:
+                    print(f"DEBUG: PyQt5 failed: {qt_err}")
+                    import traceback
+                    traceback.print_exc()
+                    # Continue to show fallback icon preview
+            else:
+                # Show file icon/name for non-images - centered and larger
+                file_name = os.path.basename(file_path)
+                file_frame = ctk.CTkFrame(media_frame, fg_color="transparent")
+                file_frame.pack(expand=True)
+                
+                file_icon = ctk.CTkLabel(
+                    file_frame,
+                    text="📄",
+                    font=ctk.CTkFont(size=64),
+                    text_color="#667781"
+                )
+                file_icon.pack(pady=(20, 10))
+                
+                file_label = ctk.CTkLabel(
+                    file_frame,
+                    text=file_name,
+                    font=ctk.CTkFont(size=14),
+                    text_color="white",
+                    wraplength=350
+                )
+                file_label.pack(pady=(0, 20))
+        except Exception as e:
+            # Fallback to filename - centered
+            file_name = os.path.basename(file_path)
+            file_frame = ctk.CTkFrame(media_frame, fg_color="transparent")
+            file_frame.pack(expand=True)
+            
+            file_icon = ctk.CTkLabel(
+                file_frame,
+                text="📎",
+                font=ctk.CTkFont(size=64),
+                text_color="#667781"
+            )
+            file_icon.pack(pady=(20, 10))
+            
+            file_label = ctk.CTkLabel(
+                file_frame,
+                text=file_name,
+                font=ctk.CTkFont(size=14),
+                text_color="white",
+                wraplength=350
+            )
+            file_label.pack(pady=(0, 20))
+        
+        # Caption input area - at bottom like WhatsApp
+        caption_frame = ctk.CTkFrame(preview_container, fg_color="#202C33", height=70, corner_radius=15)
+        caption_frame.pack(fill="x", padx=20, pady=(0, 20))
+        caption_frame.pack_propagate(False)
+        
+        self.caption_input = ctk.CTkEntry(
+            caption_frame,
+            placeholder_text="Add a caption...",
+            font=ctk.CTkFont(size=14),
+            fg_color="#202C33",
+            border_color="#374151",
+            text_color="white",
+            height=45
+        )
+        self.caption_input.pack(side="left", fill="x", expand=True, padx=15, pady=12)
+        self.caption_input.bind("<Return>", lambda e: self.send_media_with_caption(file_path))
+        
+        # Send button (green circle like WhatsApp)
+        send_btn = ctk.CTkButton(
+            caption_frame,
+            text="▶",
+            width=45,
+            height=45,
+            font=ctk.CTkFont(size=18),
+            fg_color="#00A884",  # WhatsApp green
+            hover_color="#008F72",
+            corner_radius=23,
+            command=lambda: self.send_media_with_caption(file_path)
+        )
+        send_btn.pack(side="right", padx=15, pady=12)
+        
+        # Store file path for sending
+        self.pending_media_file = file_path
+        
+        # Focus caption input
+        self.caption_input.focus()
+    
+    def close_media_preview(self):
+        """Close media preview dialog"""
+        if hasattr(self, 'preview_overlay'):
+            self.preview_overlay.destroy()
+            delattr(self, 'preview_overlay')
+        if hasattr(self, 'pending_media_file'):
+            delattr(self, 'pending_media_file')
+    
+    def send_media_with_caption(self, file_path):
+        """Send media with caption"""
+        caption = self.caption_input.get().strip() if hasattr(self, 'caption_input') else ""
+        
+        if self.current_contact and self.on_send_media:
+            phone = self.current_contact.get('number', self.current_contact.get('phone', ''))
+            # Send with caption
+            self.on_send_media(phone, file_path, caption)
+        
+        # Close preview
+        self.close_media_preview()

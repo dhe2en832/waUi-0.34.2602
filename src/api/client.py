@@ -5,6 +5,7 @@ Handles communication with WACSA-MD2 WhatsApp server and log endpoints
 
 import requests
 import json
+import os
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 from loguru import logger
@@ -52,7 +53,7 @@ class WACSAAPIClient:
         self.auth_token = token
         self.session.headers.update({'x-access-token': token})
         
-    def _make_request(self, method, endpoint, data=None, params=None):
+    def _make_request(self, method, endpoint, data=None, params=None, json=None, files=None):
         """Make HTTP request to WACSA-MD2 API"""
         url = f"{self.config.base_url.rstrip('/')}/{endpoint.lstrip('/')}"
         headers = {
@@ -64,7 +65,7 @@ class WACSAAPIClient:
             headers['x-access-token'] = self.auth_token
             
         try:
-            response = self.session.request(method, url, headers=headers, data=data, params=params)
+            response = self.session.request(method, url, headers=headers, data=data, json=json, params=params)
             
             # Handle authentication errors
             if response.status_code == 403:
@@ -163,13 +164,47 @@ class WACSAAPIClient:
         return self._make_request("GET", "log/backup/statistic")
         
     def send_media_message(self, phone: str, media_file: str, caption: str = "") -> Dict[str, Any]:
-        """Send WhatsApp media message using /message/send-media"""
-        data = {
-            "number": phone,  # Server expects 'number' not 'phone'
-            "media": media_file,
-            "caption": caption
+        """Send WhatsApp media message using /message/send-media with file upload"""
+        url = f"{self.config.base_url.rstrip('/')}/message/send-media"
+        
+        # Prepare form data
+        data = {"number": phone, "message": caption}
+        
+        # Prepare file
+        with open(media_file, 'rb') as f:
+            files = {'file': (os.path.basename(media_file), f, self._get_mime_type(media_file))}
+            headers = {'x-access-token': self.auth_token} if self.auth_token else {}
+            
+            try:
+                response = self.session.post(url, data=data, files=files, headers=headers)
+                
+                if response.status_code == 403:
+                    raise Exception("Authentication failed: Please login first")
+                elif response.status_code == 401:
+                    raise Exception("Authentication failed: Invalid token")
+                    
+                response.raise_for_status()
+                return response.json()
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Media send failed: {e}")
+                raise
+    
+    def _get_mime_type(self, file_path: str) -> str:
+        """Get MIME type from file extension"""
+        ext = os.path.splitext(file_path)[1].lower()
+        mime_types = {
+            '.png': 'image/png',
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.gif': 'image/gif',
+            '.mp4': 'video/mp4',
+            '.avi': 'video/x-msvideo',
+            '.mov': 'video/quicktime',
+            '.pdf': 'application/pdf',
+            '.doc': 'application/msword',
+            '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
         }
-        return self._make_request("POST", "message/send-media", json=data)
+        return mime_types.get(ext, 'application/octet-stream')
         
     def send_message(self, phone: str, message: str) -> Dict[str, Any]:
         """Send WhatsApp message (legacy - uses send_text_message)"""
@@ -187,14 +222,6 @@ class WACSAAPIClient:
             data = {'type': media_type}
             return self._make_request("POST", "whatsapp/upload", files=files, data=data)
         
-    def send_media_message(self, phone: str, media_url: str, caption: str = "") -> Dict[str, Any]:
-        """Send media message (image, video, document)"""
-        data = {
-            "phone": phone,
-            "media": media_url,
-            "caption": caption
-        }
-        return self._make_request("POST", "whatsapp/send-media", json=data)
         
     def get_chats(self, limit: int = 50) -> Dict[str, Any]:
         """Get WhatsApp chats"""
