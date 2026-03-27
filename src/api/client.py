@@ -74,8 +74,13 @@ class WACSAAPIClient:
                 logger.error("Authentication failed: Token salah")
                 raise Exception("Authentication failed: Invalid token")
             elif response.status_code == 404:
-                logger.error(f"Endpoint not found: {endpoint}")
-                raise Exception(f"Endpoint not found: {endpoint}")
+                # 404 for log endpoints means log file is empty, not endpoint missing
+                if 'log/' in endpoint:
+                    logger.info(f"Log file empty for endpoint: {endpoint}")
+                    return {"status": False, "response": [], "message": "Log file is empty"}
+                else:
+                    logger.error(f"Endpoint not found: {endpoint}")
+                    raise Exception(f"Endpoint not found: {endpoint}")
                 
             response.raise_for_status()
             return response.json()
@@ -105,7 +110,7 @@ class WACSAAPIClient:
     def send_text_message(self, phone: str, message: str) -> Dict[str, Any]:
         """Send WhatsApp text message using /message/send-text"""
         data = {
-            "phone": phone,
+            "number": phone,  # Server expects 'number' not 'phone'
             "message": message
         }
         return self._make_request("POST", "message/send-text", json=data)
@@ -134,11 +139,33 @@ class WACSAAPIClient:
         Endpoint: GET /log/statistic
         """
         return self._make_request("GET", "log/statistic")
+    
+    # Backup Log Endpoints - Read from server backup folder
+    def get_backup_received_messages(self) -> Dict[str, Any]:
+        """
+        Get received messages from server backup files
+        Endpoint: GET /log/backup/received-message
+        """
+        return self._make_request("GET", "log/backup/received-message")
+    
+    def get_backup_sent_messages(self) -> Dict[str, Any]:
+        """
+        Get sent messages from server backup files
+        Endpoint: GET /log/backup/sent-message
+        """
+        return self._make_request("GET", "log/backup/sent-message")
+    
+    def get_backup_statistics(self) -> Dict[str, Any]:
+        """
+        Get statistics from server backup files
+        Endpoint: GET /log/backup/statistic
+        """
+        return self._make_request("GET", "log/backup/statistic")
         
     def send_media_message(self, phone: str, media_file: str, caption: str = "") -> Dict[str, Any]:
         """Send WhatsApp media message using /message/send-media"""
         data = {
-            "phone": phone,
+            "number": phone,  # Server expects 'number' not 'phone'
             "media": media_file,
             "caption": caption
         }

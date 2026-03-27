@@ -36,13 +36,18 @@ class WacsaApp:
         # Check for saved credentials
         saved_creds = LoginWindow.load_credentials()
         
-        if saved_creds and saved_creds.get('remember'):
-            # Try auto-login
-            self.show_main_window(
-                saved_creds.get('server_url'),
-                'wacsa-logged-in-token',  # Token from saved session
-                saved_creds.get('email')
-            )
+        if saved_creds and saved_creds.get('remember') and saved_creds.get('token'):
+            # Try auto-login with saved token
+            try:
+                self.show_main_window(
+                    saved_creds.get('server_url'),
+                    saved_creds.get('token'),  # Use saved token
+                    saved_creds.get('email')
+                )
+            except Exception as e:
+                # If auto-login fails, show login window
+                print(f"Auto-login failed: {e}")
+                self.show_login_window()
         else:
             # Show login window
             self.show_login_window()
@@ -66,12 +71,35 @@ class WacsaApp:
     
     def show_main_window(self, server_url, auth_token, user_email):
         """Show main application window"""
-        # Destroy root and create new main window
+        try:
+            # Create main window
+            self.main_window = MainWindow(server_url, auth_token, user_email)
+            
+            # Ensure window is visible and focused
+            self.main_window.deiconify()  # Make sure window is not minimized
+            self.main_window.lift()  # Bring window to front
+            self.main_window.focus_force()  # Force focus on window
+            self.main_window.attributes('-topmost', True)  # Temporarily set topmost
+            self.main_window.after(100, lambda: self.main_window.attributes('-topmost', False))  # Remove topmost after 100ms
+            
+            # Withdraw root window after main window is shown
+            if self.root:
+                self.root.withdraw()
+            
+            # When main window closes, quit the application
+            self.main_window.protocol("WM_DELETE_WINDOW", self.on_main_window_close)
+        except Exception as e:
+            print(f"Error creating main window: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+    
+    def on_main_window_close(self):
+        """Handle main window close"""
+        if self.main_window:
+            self.main_window.destroy()
         if self.root:
-            self.root.destroy()
-        
-        # Create main window
-        self.main_window = MainWindow(server_url, auth_token, user_email)
+            self.root.quit()
 
 
 def main():

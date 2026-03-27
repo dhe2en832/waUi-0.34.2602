@@ -27,8 +27,7 @@ class ChatView(ctk.CTkFrame):
         
     def setup_ui(self):
         """Setup chat view UI"""
-        # Header
-        self.header = ctk.CTkFrame(self, height=60, fg_color="#F2F2F7")
+        self.header = ctk.CTkFrame(self, height=60, fg_color="white")
         self.header.pack(fill="x", side="top")
         self.header.pack_propagate(False)
         
@@ -47,19 +46,18 @@ class ChatView(ctk.CTkFrame):
             contact_frame,
             text="",
             font=ctk.CTkFont(size=12),
-            text_color="#8E8E93"
+            text_color="#667781"
         )
         self.contact_status_label.pack(anchor="w")
         
         # Messages area (scrollable)
         self.messages_frame = ctk.CTkScrollableFrame(
             self,
-            fg_color="white"
+            fg_color="#F5F6F6"
         )
         self.messages_frame.pack(fill="both", expand=True, padx=0, pady=0)
         
-        # Input area
-        input_container = ctk.CTkFrame(self, height=70, fg_color="#F2F2F7")
+        input_container = ctk.CTkFrame(self, height=70, fg_color="white")
         input_container.pack(fill="x", side="bottom")
         input_container.pack_propagate(False)
         
@@ -73,9 +71,9 @@ class ChatView(ctk.CTkFrame):
             width=40,
             height=40,
             font=ctk.CTkFont(size=20),
-            fg_color="#E5E5EA",
-            text_color="black",
-            hover_color="#D1D1D6",
+            fg_color="#F0F2F5",
+            text_color="#111B21",
+            hover_color="#E9EDEF",
             command=self.attach_media
         )
         attach_btn.pack(side="left", padx=(0, 10))
@@ -85,7 +83,10 @@ class ChatView(ctk.CTkFrame):
             input_frame,
             placeholder_text="Type a message...",
             height=40,
-            font=ctk.CTkFont(size=14)
+            font=ctk.CTkFont(size=14),
+            corner_radius=10,
+            border_color="#E9EDEF",
+            fg_color="#F8F9FA"
         )
         self.message_input.pack(side="left", fill="x", expand=True, padx=(0, 10))
         self.message_input.bind("<Return>", lambda e: self.send_message())
@@ -103,18 +104,37 @@ class ChatView(ctk.CTkFrame):
         )
         self.send_btn.pack(side="left")
         
+    def _normalize_message(self, msg):
+        if isinstance(msg, dict) and isinstance(msg.get("_data"), dict):
+            normalized = dict(msg["_data"])
+            normalized["_raw"] = msg
+            return normalized
+        if isinstance(msg, dict):
+            return msg
+        return {}
+
     def set_contact(self, contact_data):
         """Set current contact and load messages"""
         self.current_contact = contact_data
         
-        # Update header
-        contact_name = contact_data.get('name', contact_data.get('number', 'Unknown'))
-        self.contact_name_label.configure(text=contact_name)
+        # Update header with name and number on same line
+        contact_name = contact_data.get('name', 'Unknown')
+        contact_number = contact_data.get('number', '')
+        
+        # Display both name and number on same line
+        if contact_number and contact_number != contact_name:
+            header_text = f"{contact_name} • {contact_number}"
+        else:
+            header_text = contact_name
+            
+        self.contact_name_label.configure(text=header_text)
         self.contact_status_label.configure(text="Online")
         
         # Clear and load messages
         self.clear_messages()
-        self.load_messages(contact_data.get('messages', []))
+        messages = contact_data.get('messages', [])
+        normalized_messages = [self._normalize_message(m) for m in messages if m]
+        self.load_messages(normalized_messages)
         
     def load_messages(self, messages):
         """Load messages into chat view"""
@@ -129,26 +149,33 @@ class ChatView(ctk.CTkFrame):
             
             # Add messages
             for msg in date_messages:
-                is_sent = msg.get('fromMe', False) or msg.get('_data', {}).get('id', {}).get('fromMe', False)
-                bubble = MessageBubble(self.messages_frame, msg, is_sent=is_sent)
-                bubble.pack(fill="x")
+                try:
+                    is_sent = bool(msg.get("fromMe") or (isinstance(msg.get("id"), dict) and msg["id"].get("fromMe")))
+                    bubble = MessageBubble(self.messages_frame, msg, is_sent=is_sent)
+                    bubble.pack(fill="x")
+                except Exception:
+                    continue
         
         # Scroll to bottom
-        self.messages_frame._parent_canvas.yview_moveto(1.0)
+        try:
+            self.messages_frame._parent_canvas.yview_moveto(1.0)
+        except Exception:
+            pass
         
     def group_by_date(self, messages):
-        """Group messages by date"""
+        """Group messages by date with WhatsApp-like order"""
         from datetime import datetime
-        from collections import OrderedDict
         
-        grouped = OrderedDict()
+        grouped = {}
         
         for msg in messages:
             # Get timestamp
             timestamp = msg.get('timestamp', msg.get('t', 0))
             
             try:
-                if isinstance(timestamp, int):
+                if isinstance(timestamp, str) and timestamp.isdigit():
+                    timestamp = int(timestamp)
+                if isinstance(timestamp, int) and timestamp > 0:
                     dt = datetime.fromtimestamp(timestamp)
                 else:
                     dt = datetime.now()
@@ -173,7 +200,44 @@ class ChatView(ctk.CTkFrame):
                     grouped["Unknown"] = []
                 grouped["Unknown"].append(msg)
         
-        return grouped
+        # Sort messages within each date group (oldest first, like WhatsApp)
+        for date_key in grouped:
+            def _msg_sort_key(m):
+                t = m.get("timestamp", m.get("t", 0))
+                if isinstance(t, str) and t.isdigit():
+                    return int(t)
+                if isinstance(t, int):
+                    return t
+                raw = m.get('_raw', {})
+                if isinstance(raw, dict):
+                    data = raw.get('_data', {})
+                    tt = data.get('timestamp', data.get('t', 0))
+                    try:
+                        return int(tt)
+                    except Exception:
+                        return 0
+                return 0
+            grouped[date_key].sort(key=_msg_sort_key)
+        
+        # Sort dates in WhatsApp-like order: Yesterday → Today → Older dates
+        def get_date_sort_key(date_key):
+            if date_key == "Yesterday":
+                return 1  # Yesterday first
+            elif date_key == "Today":
+                return 2  # Today second
+            elif date_key == "Unknown":
+                return 999  # Unknown last
+            else:
+                # For other dates, parse and sort by date (older first)
+                try:
+                    dt = datetime.strptime(date_key, "%B %d, %Y")
+                    return 3 + (datetime.now().date() - dt.date()).days
+                except:
+                    return 998
+        
+        # Sort and return ordered dict
+        sorted_keys = sorted(grouped.keys(), key=get_date_sort_key)
+        return {key: grouped[key] for key in sorted_keys}
         
     def clear_messages(self):
         """Clear all messages from view"""
