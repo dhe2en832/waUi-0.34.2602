@@ -1,6 +1,8 @@
 # UI Framework
 # tkinter is built-in with Python - no need to install
 customtkinter==5.2.2
+PyQt5==5.15.11
+Pillow==12.1.1
 
 # API Client (removed aiohttp to avoid compilation issues)
 requests==2.32.3
