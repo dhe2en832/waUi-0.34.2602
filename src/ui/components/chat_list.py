@@ -186,10 +186,10 @@ class ChatListItem(ctk.CTkFrame):
             days_diff = (today - msg_date).days
             
             if days_diff == 0:
-                # Today - show time only
+                # Today - show time only (same as bubble)
                 return msg_time.strftime('%H:%M')
             elif days_diff == 1:
-                # Yesterday
+                # Yesterday (same as bubble)
                 return 'Yesterday'
             elif days_diff < 7:
                 # This week - show day name

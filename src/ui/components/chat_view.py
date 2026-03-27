@@ -153,7 +153,10 @@ class ChatView(ctk.CTkFrame):
                     is_sent = bool(msg.get("fromMe") or (isinstance(msg.get("id"), dict) and msg["id"].get("fromMe")))
                     bubble = MessageBubble(self.messages_frame, msg, is_sent=is_sent)
                     bubble.pack(fill="x")
-                except Exception:
+                except Exception as e:
+                    print(f"DEBUG: Error rendering message bubble: {e}")
+                    import traceback
+                    traceback.print_exc()
                     continue
         
         # Scroll to bottom
@@ -219,19 +222,19 @@ class ChatView(ctk.CTkFrame):
                 return 0
             grouped[date_key].sort(key=_msg_sort_key)
         
-        # Sort dates in WhatsApp-like order: Yesterday → Today → Older dates
+        # Sort dates in WhatsApp-like order: Yesterday → Today (oldest first, newest at bottom)
         def get_date_sort_key(date_key):
             if date_key == "Yesterday":
-                return 1  # Yesterday first
+                return 0  # Yesterday first (top)
             elif date_key == "Today":
-                return 2  # Today second
+                return 1  # Today second (bottom)
             elif date_key == "Unknown":
                 return 999  # Unknown last
             else:
                 # For other dates, parse and sort by date (older first)
                 try:
                     dt = datetime.strptime(date_key, "%B %d, %Y")
-                    return 3 + (datetime.now().date() - dt.date()).days
+                    return 2 + (datetime.now().date() - dt.date()).days
                 except:
                     return 998
         

@@ -656,7 +656,10 @@ class MainWindow(ctk.CTk):
                 source = "current logs (server API)"
             
             # Parse messages and create contacts
+            print(f"DEBUG: received_data type={type(received_data)}, keys={received_data.keys() if isinstance(received_data, dict) else 'N/A'}")
+            print(f"DEBUG: sent_data type={type(sent_data)}, keys={sent_data.keys() if isinstance(sent_data, dict) else 'N/A'}")
             contacts = self.parse_messages_to_contacts(received_data, sent_data)
+            print(f"DEBUG: parsed {len(contacts)} contacts")
             
             # Load into chat list
             self.chat_list.load_contacts(contacts)
@@ -827,7 +830,8 @@ class MainWindow(ctk.CTk):
                     
                     # If we found actual phone number, use it
                     if actual_phone:
-                        phone_number = self.format_indonesian_number(actual_phone)
+                        # First check if it's a WhatsApp ID that needs mapping
+                        phone_number = self.convert_whatsapp_id_to_phone(actual_phone)
                         # Get actual conversation partner (not server number)
                         conversation_partner = self.get_conversation_partner(msg_data, phone_number)
                         if conversation_partner != phone_number:
@@ -896,10 +900,15 @@ class MainWindow(ctk.CTk):
                         body = body[:50] + '...'
                     contacts_dict[phone_number]['last_message'] = body
                     
-                    # Update last message time
+                    # Update last message time only if this message is newer
                     msg_time = msg_data.get('t', msg_data.get('timestamp', ''))
                     if msg_time:
-                        contacts_dict[phone_number]['last_message_time'] = str(msg_time)
+                        current_time = contacts_dict[phone_number].get('last_message_time', '0')
+                        try:
+                            if int(str(msg_time)) > int(str(current_time)):
+                                contacts_dict[phone_number]['last_message_time'] = str(msg_time)
+                        except:
+                            contacts_dict[phone_number]['last_message_time'] = str(msg_time)
                     
                 except Exception as e:
                     print(f"Error parsing received message: {e}")
@@ -936,6 +945,7 @@ class MainWindow(ctk.CTk):
                     if isinstance(to_field, dict) and 'user' in to_field:
                         # Check if it's an actual phone number
                         user = to_field['user']
+                        print(f"DEBUG sent: to_field is dict, user={user}")
                         if user.isdigit() and len(user) >= 10:
                             actual_phone = user
                     elif isinstance(to_field, str) and '@c.us' in to_field:
@@ -954,7 +964,8 @@ class MainWindow(ctk.CTk):
                     
                     # If we found actual phone number, use it
                     if actual_phone:
-                        temp_phone = self.format_indonesian_number(actual_phone)
+                        # First check if it's a WhatsApp ID that needs mapping
+                        temp_phone = self.convert_whatsapp_id_to_phone(actual_phone)
                         # Get actual conversation partner (not server number)
                         conversation_partner = self.get_conversation_partner(msg_data, temp_phone)
                         phone_number = conversation_partner if conversation_partner != temp_phone else temp_phone
@@ -1019,10 +1030,15 @@ class MainWindow(ctk.CTk):
                         body = body[:50] + '...'
                     contacts_dict[phone_number]['last_message'] = body
                     
-                    # Update last message time
+                    # Update last message time only if this message is newer
                     msg_time = msg_data.get('t', msg_data.get('timestamp', ''))
                     if msg_time:
-                        contacts_dict[phone_number]['last_message_time'] = str(msg_time)
+                        current_time = contacts_dict[phone_number].get('last_message_time', '0')
+                        try:
+                            if int(str(msg_time)) > int(str(current_time)):
+                                contacts_dict[phone_number]['last_message_time'] = str(msg_time)
+                        except:
+                            contacts_dict[phone_number]['last_message_time'] = str(msg_time)
                     
                 except Exception as e:
                     print(f"Error parsing sent message: {e}")

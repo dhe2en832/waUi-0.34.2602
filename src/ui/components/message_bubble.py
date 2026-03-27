@@ -120,6 +120,20 @@ class MessageBubble(ctk.CTkFrame):
         if ack >= 3: return "✓✓" # Read
         return "✓"
 
+    def format_timestamp(self, ts):
+        """Format timestamp to HH:MM"""
+        try:
+            if ts is None:
+                return ""
+            if isinstance(ts, str) and ts.isdigit():
+                ts = int(ts)
+            if isinstance(ts, int) and ts > 0:
+                dt = datetime.fromtimestamp(ts)
+                return dt.strftime("%H:%M")
+            return ""
+        except:
+            return ""
+
 
 class DateSeparator(ctk.CTkFrame):
     """Date separator for grouping messages"""

@@ -25,22 +25,64 @@ class BackupLogReader:
                 if not content:
                     return []
                 
+                # Remove trailing comma if present (common in log files)
+                if content.endswith(','):
+                    content = content[:-1]
+                
                 # Handle case where file contains array of objects
                 if content.startswith('['):
                     return json.loads(content)
+                elif content.startswith('{'):
+                    # Check if this is multiple comma-separated objects
+                    if '},{' in content:
+                        # Split by '},{' and parse each object individually
+                        # Add brackets around each object and join with commas
+                        wrapped = '[' + content + ']'
+                        return json.loads(wrapped)
+                    else:
+                        # Single object - wrap in array
+                        return [json.loads(content)]
                 else:
-                    # Handle case where file contains comma-separated objects
-                    # Remove trailing comma and wrap in array brackets
-                    if content.endswith(','):
-                        content = content[:-1]
+                    # Handle case where file contains comma-separated objects (legacy format)
                     content = '[' + content + ']'
                     return json.loads(content)
         except json.JSONDecodeError as e:
             logger.error(f"JSON decode error in {file_path}: {e}")
-            return []
+            # Try to extract objects individually as fallback
+            try:
+                return self._extract_objects_fallback(content)
+            except:
+                return []
         except Exception as e:
             logger.error(f"Error reading file {file_path}: {e}")
             return []
+    
+    def _extract_objects_fallback(self, content: str) -> List[Dict[str, Any]]:
+        """Fallback method to extract JSON objects from malformed content"""
+        import re
+        objects = []
+        # Find all top-level JSON objects
+        # Match content between { and } pairs
+        brace_count = 0
+        start_idx = None
+        
+        for i, char in enumerate(content):
+            if char == '{':
+                if brace_count == 0:
+                    start_idx = i
+                brace_count += 1
+            elif char == '}':
+                brace_count -= 1
+                if brace_count == 0 and start_idx is not None:
+                    obj_str = content[start_idx:i+1]
+                    try:
+                        obj = json.loads(obj_str)
+                        objects.append(obj)
+                    except:
+                        pass
+                    start_idx = None
+        
+        return objects
     
     def get_received_messages(self) -> Dict[str, Any]:
         """Get all received messages from backup files"""
