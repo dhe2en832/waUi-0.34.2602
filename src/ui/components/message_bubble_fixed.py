@@ -19,9 +19,6 @@ _IMAGE_STORAGE = {
     'photos': [],  # List to store PhotoImage references
 }
 
-# Global list that never gets cleared - keeps ALL images forever
-_ALL_IMAGES = []
-
 def _store_photo(photo):
     """Store PhotoImage in global cache to prevent garbage collection"""
     _IMAGE_STORAGE['photos'].append(photo)
@@ -102,21 +99,13 @@ class MessageBubble(ctk.CTkFrame):
         image_data = self._extract_image_data(message_text)
         
         if image_data and PIL_AVAILABLE:
-            # Extract caption from message_data fields (caption is separate from image base64)
-            caption = self._extract_caption_from_message()
-            
-            # Create a container for image + caption
-            image_container = ctk.CTkFrame(inner_content, fg_color="transparent")
-            image_container.pack(padx=4, pady=(2, 0), anchor="w", fill="x")
-            
-            # Render image in the container
-            self._render_image_file(image_container, image_data, text_color)
-            
-            # If there's caption, show it below image
+            # Render image immediately with proper references
+            self._render_image_file(inner_content, image_data, text_color)
+            # If there's remaining text after removing image data, show it as caption
+            caption = self._extract_caption(message_text)
             if caption:
-                print(f"DEBUG: Displaying caption: '{caption}'")
                 caption_label = ctk.CTkLabel(
-                    image_container,
+                    inner_content,
                     text=caption,
                     font=ctk.CTkFont(size=14),
                     text_color=text_color,
@@ -235,82 +224,15 @@ class MessageBubble(ctk.CTkFrame):
         return None
     
     def _extract_caption(self, text):
-        """Extract caption text from message (text before image data)"""
-        if not text or not isinstance(text, str):
-            return None
-        
-        # Check if message starts with base64 image pattern
-        image_patterns = ['/9j/', 'iVBORw0KGgo', 'R0lGOD', 'UklGR']
-        text_stripped = text.strip()
-        
-        # Debug
-        print(f"DEBUG: Extracting caption from: {text_stripped[:50]}...")
-        
-        # If text starts with image pattern, no caption before image
-        for pattern in image_patterns:
-            if text_stripped.startswith(pattern):
-                print(f"DEBUG: Text starts with image pattern, no caption")
-                return None
-        
-        # Check if text contains image pattern somewhere
-        # If yes, extract text before the image
-        for pattern in image_patterns:
-            idx = text_stripped.find(pattern)
-            if idx > 0:
-                caption = text_stripped[:idx].strip()
-                print(f"DEBUG: Found caption before image: '{caption}'")
-                if caption:
-                    return caption
-        
-        # Check for embedded base64 via regex (text before base64 block)
-        import re
-        base64_pattern = r'([A-Za-z0-9+/]{50,}={0,2})'
-        match = re.search(base64_pattern, text_stripped)
-        if match:
-            caption = text_stripped[:match.start()].strip()
-            print(f"DEBUG: Found caption via regex: '{caption}'")
-            if caption:
-                return caption
-        
-        print(f"DEBUG: No caption found")
-        return None
-
-    def _extract_caption_from_message(self):
-        """Extract caption from message_data fields (separate from image data)"""
-        # Check various fields where caption might be stored
-        caption = None
-        
-        # Try direct caption field
-        caption = self.message_data.get('caption')
-        if caption:
-            print(f"DEBUG: Found caption in 'caption' field: '{caption}'")
-            return caption
-        
-        # Try _raw -> _data -> caption
-        raw = self.message_data.get('_raw', {})
-        if isinstance(raw, dict):
-            data = raw.get('_data', {})
-            caption = data.get('caption')
-            if caption:
-                print(f"DEBUG: Found caption in _raw._data.caption: '{caption}'")
-                return caption
-        
-        # Check if there's a separate body/text that is not base64 image
-        body = self.message_data.get('body') or self.message_data.get('text')
-        if body and isinstance(body, str):
-            # Check if body is NOT base64 image
-            if not body.startswith('/9j/') and not body.startswith('iVBOR'):
-                print(f"DEBUG: Found caption in body/text field: '{body}'")
-                return body
-        
-        print(f"DEBUG: No caption found in message_data")
+        """Extract caption text from message (if any after image data)"""
+        # For now, return None - caption extraction can be enhanced later
+        # if the server separates caption from image data
         return None
 
     def _render_image_file(self, parent, image_bytes, text_color):
         """Render actual image and allow user to download on click"""
         try:
             import os
-            import tempfile
             from PIL import Image
             import tkinter as tk
             
@@ -320,31 +242,16 @@ class MessageBubble(ctk.CTkFrame):
             # Load image from bytes
             pil_image = Image.open(io.BytesIO(image_bytes))
             
-            # Calculate display dimensions - larger like WhatsApp
-            max_width = 480
-            max_height = 480
-            min_width = 200  # Minimum width for small images
-            min_height = 100  # Minimum height for small images
+            # Calculate display dimensions
+            max_width = 300
+            max_height = 300
             orig_width, orig_height = pil_image.size
             
             # Store original dimensions
             self._image_width = orig_width
             self._image_height = orig_height
             
-            # Start with original size
             width, height = orig_width, orig_height
-            
-            # Scale up small images to minimum size
-            if width < min_width:
-                ratio = min_width / width
-                width = min_width
-                height = int(height * ratio)
-            if height < min_height:
-                ratio = min_height / height
-                height = min_height
-                width = int(width * ratio)
-            
-            # Then apply max limits
             if width > max_width:
                 ratio = max_width / width
                 width = max_width
@@ -357,64 +264,51 @@ class MessageBubble(ctk.CTkFrame):
             # Resize for display
             display_image = pil_image.resize((width, height), Image.Resampling.LANCZOS)
             
-            # Save to temp file - PhotoImage from file is more stable
-            temp_dir = tempfile.gettempdir()
-            temp_path = os.path.join(temp_dir, f"wacsa_img_{id(self)}.png")
-            display_image.save(temp_path, "PNG")
-            
-            # Get the root window for PhotoImage master
-            try:
-                root = parent.winfo_toplevel()
-            except:
-                root = None
-            
-            # Create PhotoImage from file with explicit master
-            if root:
-                self._photo = tk.PhotoImage(master=root, file=temp_path)
-            else:
-                self._photo = tk.PhotoImage(file=temp_path)
-            
-            # CRITICAL: Add to global list that NEVER gets cleared
-            global _ALL_IMAGES
-            _ALL_IMAGES.append(self._photo)
-            
-            print(f"DEBUG: PhotoImage created, total global images: {len(_ALL_IMAGES)}")
-            
-            # Create frame to hold image
-            bg_color = "#D6E9FF" if self.is_sent else "#FFFFFF"
-            img_frame = tk.Frame(parent, bg=bg_color, bd=0, highlightthickness=0)
-            img_frame.pack(padx=4, pady=(2, 0), anchor="w")
-            
-            # Create tkinter Label with image - no image param in constructor
-            img_label = tk.Label(
-                img_frame,
-                bg=bg_color,
-                bd=0,
-                highlightthickness=0
+            # Create CTkImage (CustomTkinter's native image type)
+            ctk_image = ctk.CTkImage(
+                light_image=display_image,
+                dark_image=display_image,
+                size=(width, height)
             )
-            # Set image AFTER creation
-            img_label.config(image=self._photo)
-            img_label.pack()
             
-            # Store reference
-            img_label._photo = self._photo
+            # IMPORTANT: Store strong reference to prevent garbage collection
+            self._ctk_image = ctk_image  # Instance variable
+            photo_id = _store_photo(ctk_image)  # Global storage
+            print(f"DEBUG: CTkImage created and stored with ID {photo_id}")
+            
+            # Create CTkLabel with the image
+            img_label = ctk.CTkLabel(
+                parent,
+                image=ctk_image,
+                text="",
+                fg_color="transparent",
+                width=width,
+                height=height
+            )
+            img_label.pack(padx=4, pady=(2, 0), anchor="w")
+            
+            # Keep strong reference in both places
+            img_label._ctk_image = ctk_image
             self._img_label = img_label
             
-            print(f"DEBUG: Image rendered successfully: {orig_width}x{orig_height} -> {width}x{height}")
+            print(f"DEBUG: CTkLabel with image created and packed")
             
-            # Add click handler to show preview
+            # Add click handler to download image
             def on_image_click(event):
                 if not self._downloading:
-                    self._show_image_preview()
+                    self._downloading = True
+                    self._download_image()
+                    # Reset flag after delay
+                    self.after(500, lambda: setattr(self, '_downloading', False))
             
             # Bind click to label only (no container reference needed)
             img_label.bind("<Button-1>", on_image_click)
             img_label.configure(cursor="hand2")
             
-            # Add preview hint
+            # Add download hint
             hint = ctk.CTkLabel(
                 parent,
-                text="� Click to preview",
+                text="📥 Click to download",
                 font=ctk.CTkFont(size=10),
                 text_color="#667781"
             )
@@ -474,194 +368,6 @@ class MessageBubble(ctk.CTkFrame):
                 print(f"DEBUG: Image saved by user to: {file_path}")
         except Exception as e:
             print(f"DEBUG: Failed to save image: {e}")
-
-    def _show_image_preview(self):
-        """Show image preview window with zoom controls"""
-        try:
-            if not hasattr(self, '_image_bytes') or not self._image_bytes:
-                print("DEBUG: No image bytes to preview")
-                return
-            
-            from PIL import Image
-            import io
-            import tkinter as tk
-            
-            # Create preview window
-            preview_window = ctk.CTkToplevel(self)
-            preview_window.title("Image Preview")
-            preview_window.geometry("800x600")
-            preview_window.minsize(400, 300)
-            
-            # Make window modal and stay on top
-            preview_window.transient(self.winfo_toplevel())
-            preview_window.grab_set()
-            preview_window.lift()
-            preview_window.focus_force()
-            
-            # Load image
-            pil_image = Image.open(io.BytesIO(self._image_bytes))
-            orig_width, orig_height = pil_image.size
-            
-            # Store current scale
-            self._preview_scale = 1.0
-            self._preview_image = pil_image
-            self._preview_photos = []  # Store all PhotoImages to prevent GC
-            
-            # Main container
-            main_frame = ctk.CTkFrame(preview_window)
-            main_frame.pack(fill="both", expand=True, padx=10, pady=10)
-            
-            # Image info label
-            info_label = ctk.CTkLabel(
-                main_frame,
-                text=f"Original size: {orig_width}x{orig_height}px | Current: 100%",
-                font=ctk.CTkFont(size=12)
-            )
-            info_label.pack(pady=(0, 10))
-            
-            # Canvas for image display with scrollbars
-            canvas_frame = ctk.CTkFrame(main_frame)
-            canvas_frame.pack(fill="both", expand=True, padx=5, pady=5)
-            
-            canvas = tk.Canvas(canvas_frame, bg="#2B2B2B", highlightthickness=0)
-            h_scroll = tk.Scrollbar(canvas_frame, orient="horizontal", command=canvas.xview)
-            v_scroll = tk.Scrollbar(canvas_frame, orient="vertical", command=canvas.yview)
-            
-            canvas.configure(xscrollcommand=h_scroll.set, yscrollcommand=v_scroll.set)
-            
-            v_scroll.pack(side="right", fill="y")
-            h_scroll.pack(side="bottom", fill="x")
-            canvas.pack(side="left", fill="both", expand=True)
-            
-            # Function to update image display
-            def update_display():
-                # Calculate new size
-                new_width = int(orig_width * self._preview_scale)
-                new_height = int(orig_height * self._preview_scale)
-                
-                # Resize image
-                resized = self._preview_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
-                
-                # Save to temp file and use PhotoImage from file (more stable)
-                import tempfile
-                import os
-                temp_path = os.path.join(tempfile.gettempdir(), f"wacsa_preview_{id(self)}_{self._preview_scale}.png")
-                resized.save(temp_path, "PNG")
-                
-                # Create PhotoImage from file with explicit master
-                preview_photo = tk.PhotoImage(master=preview_window, file=temp_path)
-                
-                # Store reference in multiple places to prevent GC
-                self._preview_photos.append(preview_photo)
-                canvas._current_image = preview_photo
-                preview_window._current_image = preview_photo
-                
-                # Clear canvas and display new image
-                canvas.delete("all")
-                canvas.create_image(0, 0, anchor="nw", image=preview_photo)
-                canvas.config(scrollregion=(0, 0, new_width, new_height))
-                
-                # Update info label
-                info_label.configure(
-                    text=f"Original size: {orig_width}x{orig_height}px | Current: {int(self._preview_scale * 100)}% ({new_width}x{new_height})"
-                )
-            
-            # Initial display
-            update_display()
-            
-            # Zoom controls frame
-            controls_frame = ctk.CTkFrame(main_frame)
-            controls_frame.pack(fill="x", pady=(10, 0))
-            
-            # Zoom out button
-            def zoom_out():
-                if self._preview_scale > 0.25:
-                    self._preview_scale *= 0.8
-                    update_display()
-            
-            zoom_out_btn = ctk.CTkButton(
-                controls_frame,
-                text="🔍- Zoom Out",
-                command=zoom_out,
-                width=100
-            )
-            zoom_out_btn.pack(side="left", padx=5)
-            
-            # Zoom in button
-            def zoom_in():
-                if self._preview_scale < 5.0:
-                    self._preview_scale *= 1.25
-                    update_display()
-            
-            zoom_in_btn = ctk.CTkButton(
-                controls_frame,
-                text="🔍+ Zoom In",
-                command=zoom_in,
-                width=100
-            )
-            zoom_in_btn.pack(side="left", padx=5)
-            
-            # Reset zoom button
-            def reset_zoom():
-                self._preview_scale = 1.0
-                update_display()
-            
-            reset_btn = ctk.CTkButton(
-                controls_frame,
-                text="↺ Reset",
-                command=reset_zoom,
-                width=80
-            )
-            reset_btn.pack(side="left", padx=5)
-            
-            # Spacer
-            ctk.CTkFrame(controls_frame, fg_color="transparent").pack(side="left", expand=True)
-            
-            # Download button
-            def download_from_preview():
-                self._downloading = True
-                self._download_image()
-                self._downloading = False
-            
-            download_btn = ctk.CTkButton(
-                controls_frame,
-                text="💾 Download",
-                command=download_from_preview,
-                width=100,
-                fg_color="#007AFF",
-                hover_color="#0051D5"
-            )
-            download_btn.pack(side="right", padx=5)
-            
-            # Close button
-            close_btn = ctk.CTkButton(
-                controls_frame,
-                text="✕ Close",
-                command=preview_window.destroy,
-                width=80,
-                fg_color="#666666",
-                hover_color="#555555"
-            )
-            close_btn.pack(side="right", padx=5)
-            
-            # Keyboard shortcuts
-            def on_key(event):
-                if event.keysym == "plus" or event.keysym == "equal":
-                    zoom_in()
-                elif event.keysym == "minus":
-                    zoom_out()
-                elif event.keysym == "Escape":
-                    preview_window.destroy()
-            
-            preview_window.bind("<Key>", on_key)
-            preview_window.focus_set()
-            
-            print(f"DEBUG: Image preview window opened for {orig_width}x{orig_height}px image")
-            
-        except Exception as e:
-            print(f"DEBUG: Failed to show image preview: {e}")
-            import traceback
-            traceback.print_exc()
 
     def get_status_icon(self, ack):
         """Get status icon based on ack value"""

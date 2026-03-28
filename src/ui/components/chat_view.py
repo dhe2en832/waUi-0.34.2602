@@ -173,7 +173,7 @@ class ChatView(ctk.CTkFrame):
         
     def group_by_date(self, messages):
         """Group messages by date with WhatsApp-like order"""
-        from datetime import datetime
+        from datetime import datetime, timedelta
         
         grouped = {}
         
@@ -228,23 +228,28 @@ class ChatView(ctk.CTkFrame):
                 return 0
             grouped[date_key].sort(key=_msg_sort_key)
         
-        # Sort dates in WhatsApp-like order: Yesterday → Today (oldest first, newest at bottom)
+        # Sort dates in WhatsApp-like order: oldest first (top), newest at bottom
+        # Messages should flow chronologically: older messages at top, newer at bottom
         def get_date_sort_key(date_key):
-            if date_key == "Yesterday":
-                return 0  # Yesterday first (top)
+            today = datetime.now().date()
+            
+            if date_key == "Unknown":
+                return 99999  # Unknown last
             elif date_key == "Today":
-                return 1  # Today second (bottom)
-            elif date_key == "Unknown":
-                return 999  # Unknown last
+                # Today should be at the bottom (newest)
+                return today.toordinal()
+            elif date_key == "Yesterday":
+                # Yesterday should be just before Today
+                return (today - timedelta(days=1)).toordinal()
             else:
-                # For other dates, parse and sort by date (older first)
+                # For other dates, parse and return the actual date ordinal
                 try:
                     dt = datetime.strptime(date_key, "%B %d, %Y")
-                    return 2 + (datetime.now().date() - dt.date()).days
+                    return dt.date().toordinal()
                 except:
-                    return 998
+                    return 99998
         
-        # Sort and return ordered dict
+        # Sort and return ordered dict (oldest dates first)
         sorted_keys = sorted(grouped.keys(), key=get_date_sort_key)
         return {key: grouped[key] for key in sorted_keys}
         
