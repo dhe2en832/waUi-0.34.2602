@@ -16,8 +16,10 @@ class ChatListItem(ctk.CTkFrame):
         self.on_click = on_click
         self.is_selected = False
         
-        self.setup_ui()
+        # Bind click to self (the entire row)
         self.bind("<Button-1>", self.handle_click)
+        
+        self.setup_ui()
         
     def setup_ui(self):
         """Setup chat list item UI"""
@@ -50,6 +52,9 @@ class ChatListItem(ctk.CTkFrame):
         avatar_frame.pack(side="left", padx=(12, 12), pady=8)
         avatar_frame.pack_propagate(False)
         
+        # Bind click to avatar frame explicitly
+        self.bind_events(avatar_frame)
+        
         # Get first letter of name
         name = self.contact_data.get('name', self.contact_data.get('number', '?'))
         if not name or name == 'None':
@@ -57,12 +62,16 @@ class ChatListItem(ctk.CTkFrame):
             
         initial = name[0].upper() if name and name != '?' else '?'
         
-        ctk.CTkLabel(
+        avatar_label = ctk.CTkLabel(
             avatar_frame,
             text=initial,
             font=ctk.CTkFont(size=18, weight="bold"),
             text_color="white"
-        ).place(relx=0.5, rely=0.5, anchor="center")
+        )
+        avatar_label.place(relx=0.5, rely=0.5, anchor="center")
+        
+        # Bind click to avatar label explicitly
+        self.bind_events(avatar_label)
         
         # Info container
         info_frame = ctk.CTkFrame(self.inner_container, fg_color="transparent")
@@ -143,10 +152,20 @@ class ChatListItem(ctk.CTkFrame):
                 self.bind_events(child)
 
     def bind_events(self, widget):
-        """Bind hover and click events"""
+        """Bind hover and click events recursively to all widgets"""
+        # Bind to the widget itself
         widget.bind("<Enter>", self.on_enter)
         widget.bind("<Leave>", self.on_leave)
         widget.bind("<Button-1>", self.handle_click)
+        
+        # Set bindtags to ensure event propagates to parent
+        current_tags = widget.bindtags()
+        if self not in current_tags:
+            widget.bindtags((self,) + current_tags)
+        
+        # Recursively bind to all children
+        for child in widget.winfo_children():
+            self.bind_events(child)
 
     def on_enter(self, event=None):
         """Handle mouse enter"""

@@ -420,7 +420,7 @@ class MainWindow(ctk.CTk):
     
     def create_dashboard_page(self):
         """Create dashboard page"""
-        page = ctk.CTkScrollableFrame(self.content_frame, fg_color="#F0F2F5")
+        page = ctk.CTkFrame(self.content_frame, fg_color="#F0F2F5")
         self.pages["dashboard"] = page
         
         # Header
@@ -470,7 +470,7 @@ class MainWindow(ctk.CTk):
             val_label.pack(pady=(5, 15), padx=15, anchor="w")
             self.stats_labels[label] = val_label
             
-        # Recent Activity section
+        # Recent Activity section (scrollable)
         activity_frame = ctk.CTkFrame(page, fg_color="white", corner_radius=12)
         activity_frame.pack(fill="both", expand=True, padx=30, pady=20)
         
@@ -481,8 +481,8 @@ class MainWindow(ctk.CTk):
             text_color="#111B21"
         ).pack(pady=(20, 10), padx=20, anchor="w")
         
-        # Activity list placeholder
-        self.activity_list = ctk.CTkFrame(activity_frame, fg_color="transparent")
+        # Scrollable activity list
+        self.activity_list = ctk.CTkScrollableFrame(activity_frame, fg_color="transparent")
         self.activity_list.pack(fill="both", expand=True, padx=20, pady=(0, 20))
         
         ctk.CTkLabel(

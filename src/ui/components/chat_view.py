@@ -165,11 +165,15 @@ class ChatView(ctk.CTkFrame):
                     traceback.print_exc()
                     continue
         
-        # Scroll to bottom
+        # Scroll to bottom after UI is fully rendered
+        self.after(100, self._scroll_to_bottom)
+        
+    def _scroll_to_bottom(self):
+        """Scroll messages to bottom"""
         try:
             self.messages_frame._parent_canvas.yview_moveto(1.0)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"DEBUG: Error scrolling to bottom: {e}")
         
     def group_by_date(self, messages):
         """Group messages by date with WhatsApp-like order"""
