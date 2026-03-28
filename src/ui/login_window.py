@@ -26,16 +26,22 @@ class LoginWindow(ctk.CTkToplevel):
         
         # Window configuration
         self.title("WACSA-MD2 Login")
-        self.geometry("500x700")
         self.resizable(False, False)
         
-        # Center window
+        # Get screen dimensions and calculate appropriate size
         self.update_idletasks()
-        width = self.winfo_width()
-        height = self.winfo_height()
-        x = (self.winfo_screenwidth() // 2) - (width // 2)
-        y = (self.winfo_screenheight() // 2) - (height // 2)
-        self.geometry(f'{width}x{height}+{x}+{y}')
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        
+        # Set size (max 500x700 but ensure it fits on screen)
+        win_width = min(500, int(screen_width * 0.85))
+        win_height = min(650, int(screen_height * 0.8))
+        
+        # Calculate center position with margin
+        x = (screen_width - win_width) // 2
+        y = max(30, (screen_height - win_height) // 2 - 20)
+        
+        self.geometry(f"{win_width}x{win_height}+{x}+{y}")
         
         # Make it modal
         self.transient(parent)
@@ -50,11 +56,11 @@ class LoginWindow(ctk.CTkToplevel):
         
         # Main container
         main_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=15, border_width=1, border_color="#E9EDEF")
-        main_frame.pack(fill="both", expand=True, padx=40, pady=40)
+        main_frame.pack(fill="both", expand=True, padx=30, pady=20)
         
         # Logo/Title
         title_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
-        title_frame.pack(pady=(40, 30))
+        title_frame.pack(pady=(20, 15))
         
         title = ctk.CTkLabel(
             title_frame,
@@ -174,7 +180,7 @@ class LoginWindow(ctk.CTkToplevel):
             fg_color="#007AFF",
             hover_color="#0051D5"
         )
-        remember_checkbox.pack(pady=(0, 30), anchor="w")
+        remember_checkbox.pack(pady=(0, 15), anchor="w")
         
         # Login button
         self.login_btn = ctk.CTkButton(
@@ -244,9 +250,8 @@ class LoginWindow(ctk.CTkToplevel):
                 self.status_label.configure(text="Login successful!", text_color="#007AFF")
                 self.update()
                 
-                # Store credentials if remember me is checked
-                if self.remember_var.get():
-                    self.save_credentials(server_url, email, password, token)
+                # Store credentials (always save, but remember flag follows checkbox)
+                self.save_credentials(server_url, email, password, token)
                 
                 # Use the token provided by user
                 self.auth_token = token
@@ -280,6 +285,10 @@ class LoginWindow(ctk.CTkToplevel):
                     self.update()
                     self.auth_token = token
                     self.user_email = email
+                    
+                    # Save credentials (always save, remember flag follows checkbox)
+                    self.save_credentials(server_url, email, password, token)
+                    
                     def complete_offline():
                         self.on_login_success(server_url, self.auth_token, email)
                         self.destroy()
@@ -306,7 +315,7 @@ class LoginWindow(ctk.CTkToplevel):
                 "email": email,
                 "password": password,  # In production, encrypt this!
                 "token": token,  # Store token
-                "remember": True
+                "remember": self.remember_var.get()  # Use checkbox value
             }
             
             os.makedirs(os.path.dirname(config_file), exist_ok=True)

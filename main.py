@@ -26,6 +26,7 @@ class WacsaApp:
         self.root = None
         self.login_window = None
         self.main_window = None
+        self.force_show_login = False  # Force show login after logout
         
     def start(self):
         """Start application with login flow"""
@@ -33,10 +34,10 @@ class WacsaApp:
         self.root = ctk.CTk()
         self.root.withdraw()  # Hide root window
         
-        # Check for saved credentials
+        # Check for saved credentials and auto-login (unless forced to show login)
         saved_creds = LoginWindow.load_credentials()
         
-        if saved_creds and saved_creds.get('remember') and saved_creds.get('token'):
+        if saved_creds and saved_creds.get('remember') and saved_creds.get('token') and not self.force_show_login:
             # Try auto-login with saved token
             try:
                 self.show_main_window(
@@ -56,8 +57,33 @@ class WacsaApp:
         self.root.mainloop()
     
     def show_login_window(self):
-        """Show login window"""
+        """Show login window with pre-filled credentials if available"""
         self.login_window = LoginWindow(self.root, self.on_login_success)
+        
+        # Ensure window is ready
+        self.login_window.update()
+        
+        # Pre-fill credentials if available
+        saved_creds = LoginWindow.load_credentials()
+        if saved_creds:
+            print(f"DEBUG: Pre-filling with saved creds: {saved_creds.get('server_url')}")
+            if saved_creds.get('server_url'):
+                self.login_window.server_entry.delete(0, 'end')
+                self.login_window.server_entry.insert(0, saved_creds.get('server_url'))
+            if saved_creds.get('email'):
+                self.login_window.email_entry.delete(0, 'end')
+                self.login_window.email_entry.insert(0, saved_creds.get('email'))
+            if saved_creds.get('password'):
+                self.login_window.password_entry.delete(0, 'end')
+                self.login_window.password_entry.insert(0, saved_creds.get('password'))
+            if saved_creds.get('token'):
+                self.login_window.token_entry.delete(0, 'end')
+                self.login_window.token_entry.insert(0, saved_creds.get('token'))
+            # Set remember checkbox from saved value
+            self.login_window.remember_var.set(saved_creds.get('remember', True))
+        
+        # Handle window close button (X) properly
+        self.login_window.protocol("WM_DELETE_WINDOW", self.on_login_window_close)
         
     def on_login_success(self, server_url, auth_token, user_email):
         """Handle successful login"""
@@ -72,8 +98,8 @@ class WacsaApp:
     def show_main_window(self, server_url, auth_token, user_email):
         """Show main application window"""
         try:
-            # Create main window
-            self.main_window = MainWindow(server_url, auth_token, user_email)
+            # Create main window with logout callback
+            self.main_window = MainWindow(server_url, auth_token, user_email, on_logout=self.logout)
             
             # Ensure window is visible and focused
             self.main_window.deiconify()  # Make sure window is not minimized
@@ -100,6 +126,27 @@ class WacsaApp:
             self.main_window.destroy()
         if self.root:
             self.root.quit()
+    
+    def on_login_window_close(self):
+        """Handle login window close - quit entire app"""
+        if self.login_window:
+            self.login_window.destroy()
+        if self.root:
+            self.root.quit()
+        sys.exit(0)
+    
+    def logout(self):
+        """Handle logout - return to login window"""
+        # Destroy main window
+        if self.main_window:
+            self.main_window.destroy()
+            self.main_window = None
+        
+        # Set flag to force show login (skip auto-login)
+        self.force_show_login = True
+        
+        # Show login window again
+        self.show_login_window()
 
 
 def main():

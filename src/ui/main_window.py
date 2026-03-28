@@ -19,13 +19,14 @@ from src.ui.components.chat_view import ChatView
 class MainWindow(ctk.CTk):
     """Main application window"""
     
-    def __init__(self, server_url, auth_token, user_email):
+    def __init__(self, server_url, auth_token, user_email, on_logout=None):
         super().__init__()
         
         # Store session data
         self.server_url = server_url
         self.auth_token = auth_token
         self.user_email = user_email
+        self.on_logout = on_logout  # Callback for logout
         
         # API Client
         config = APIConfig(base_url=server_url)
@@ -34,11 +35,24 @@ class MainWindow(ctk.CTk):
         
         # Backup Reader
         self.backup_reader = BackupLogReader()
-        self.data_source_mode = "local_backup"  # Options: "current", "server_backup", "local_backup"
+        self.data_source_mode = "current"  # Options: "current", "server_backup", "local_backup"
         
         # Window configuration
         self.title("WACSA-MD2")
-        self.geometry("1200x800")
+        
+        # Get screen dimensions and set window size to fit
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        
+        # Set window size (max 85% of screen width, 80% of height for margin)
+        win_width = min(1200, int(screen_width * 0.85))
+        win_height = min(750, int(screen_height * 0.8))
+        
+        # Calculate center position with top margin
+        x = (screen_width - win_width) // 2
+        y = max(30, (screen_height - win_height) // 2 - 20)  # Add 30px top margin, shift up by 20px
+        
+        self.geometry(f"{win_width}x{win_height}+{x}+{y}")
         self.minsize(900, 600)
         
         # Current page
@@ -653,13 +667,34 @@ class MainWindow(ctk.CTk):
                 self.update_status("Loading messages from current logs...")
                 received_data = self.api_client.get_received_messages()
                 sent_data = self.api_client.get_sent_messages()
-                source = "current logs (server API)"
+                
+                # Check if current logs are empty, fallback to local_backup
+                received_count = self._count_messages(received_data)
+                sent_count = self._count_messages(sent_data)
+                
+                if received_count == 0 and sent_count == 0:
+                    self.update_status("Current logs empty, falling back to local backup...")
+                    received_data = self.backup_reader.get_received_messages()
+                    sent_data = self.backup_reader.get_sent_messages()
+                    source = "local backup (C:\\wacsa\\backup) - fallback"
+                else:
+                    source = "current logs (server API)"
             
             # Parse messages and create contacts
             print(f"DEBUG: received_data type={type(received_data)}, keys={received_data.keys() if isinstance(received_data, dict) else 'N/A'}")
             print(f"DEBUG: sent_data type={type(sent_data)}, keys={sent_data.keys() if isinstance(sent_data, dict) else 'N/A'}")
             contacts = self.parse_messages_to_contacts(received_data, sent_data)
             print(f"DEBUG: parsed {len(contacts)} contacts")
+            
+            # Count total messages for dashboard
+            received_count = self._count_messages(received_data)
+            sent_count = self._count_messages(sent_data)
+            
+            # Update dashboard stats
+            self._update_dashboard_stats(sent_count, received_count, len(contacts))
+            
+            # Update Recent Activity
+            self._update_recent_activity(received_data, sent_data)
             
             # Load into chat list
             self.chat_list.load_contacts(contacts)
@@ -669,6 +704,148 @@ class MainWindow(ctk.CTk):
         except Exception as e:
             self.update_status(f"✗ Error: {str(e)}")
             messagebox.showerror("Error", f"Failed to refresh messages:\n\n{str(e)}")
+    
+    def _count_messages(self, data):
+        """Count total messages from API response"""
+        try:
+            if isinstance(data, dict):
+                if data.get('status') and data.get('response'):
+                    return len(data['response'])
+                elif 'response' in data:
+                    return len(data['response'])
+            elif isinstance(data, list):
+                return len(data)
+        except:
+            pass
+        return 0
+    
+    def _update_dashboard_stats(self, sent_count, received_count, contacts_count):
+        """Update dashboard statistics labels"""
+        try:
+            # Check if stats_labels exists (dashboard may not be created yet)
+            if not hasattr(self, 'stats_labels') or self.stats_labels is None:
+                print("DEBUG: stats_labels not available yet, skipping dashboard stats update")
+                return
+            
+            if 'Sent Messages' in self.stats_labels:
+                self.stats_labels['Sent Messages'].configure(text=str(sent_count))
+            if 'Received Messages' in self.stats_labels:
+                self.stats_labels['Received Messages'].configure(text=str(received_count))
+            if 'Active Contacts' in self.stats_labels:
+                self.stats_labels['Active Contacts'].configure(text=str(contacts_count))
+        except Exception as e:
+            print(f"Error updating dashboard stats: {e}")
+    
+    def _update_recent_activity(self, received_data, sent_data):
+        """Update Recent Activity section with actual data"""
+        try:
+            # Check if activity_list exists (dashboard may not be created yet)
+            if not hasattr(self, 'activity_list') or self.activity_list is None:
+                print("DEBUG: activity_list not available yet, skipping recent activity update")
+                return
+            
+            # Clear existing content
+            for widget in self.activity_list.winfo_children():
+                widget.destroy()
+            
+            # Get recent messages (last 10)
+            recent_messages = []
+            
+            # Process received messages
+            received_messages = []
+            if isinstance(received_data, dict):
+                if received_data.get('status') and received_data.get('response'):
+                    received_messages = received_data['response']
+                elif 'response' in received_data:
+                    received_messages = received_data['response']
+            elif isinstance(received_data, list):
+                received_messages = received_data
+            
+            # Process sent messages
+            sent_messages = []
+            if isinstance(sent_data, dict):
+                if sent_data.get('status') and sent_data.get('response'):
+                    sent_messages = sent_data['response']
+                elif 'response' in sent_data:
+                    sent_messages = sent_data['response']
+            elif isinstance(sent_data, list):
+                sent_messages = sent_data
+            
+            # Combine and sort by timestamp (most recent first)
+            all_messages = []
+            
+            for msg in received_messages[-5:]:  # Last 5 received
+                msg_data = msg.get('_data', msg) if isinstance(msg, dict) else msg
+                all_messages.append({
+                    'type': 'received',
+                    'from': msg_data.get('from', 'Unknown'),
+                    'body': msg_data.get('body', 'Media')[:50],
+                    'time': msg_data.get('t', msg_data.get('timestamp', 0))
+                })
+            
+            for msg in sent_messages[-5:]:  # Last 5 sent
+                msg_data = msg.get('_data', msg) if isinstance(msg, dict) else msg
+                all_messages.append({
+                    'type': 'sent',
+                    'to': msg_data.get('to', 'Unknown'),
+                    'body': msg_data.get('body', 'Media')[:50],
+                    'time': msg_data.get('t', msg_data.get('timestamp', 0))
+                })
+            
+            # Sort by time (descending)
+            all_messages.sort(key=lambda x: int(str(x['time'])) if str(x['time']).isdigit() else 0, reverse=True)
+            
+            # Display top 10 recent activities
+            if all_messages:
+                for i, msg in enumerate(all_messages[:10]):
+                    # Create activity item
+                    activity_item = ctk.CTkFrame(self.activity_list, fg_color="white", corner_radius=8)
+                    activity_item.pack(fill="x", pady=2)
+                    
+                    # Icon based on type
+                    icon = "📥" if msg['type'] == 'received' else "📤"
+                    color = "#007AFF" if msg['type'] == 'received' else "#34C759"
+                    
+                    # Format contact info
+                    contact = msg.get('from', msg.get('to', 'Unknown'))
+                    if isinstance(contact, dict):
+                        contact = contact.get('user', str(contact))
+                    if '@' in str(contact):
+                        contact = contact.split('@')[0]
+                    
+                    # Truncate if too long
+                    contact_str = str(contact)[:20] + "..." if len(str(contact)) > 20 else str(contact)
+                    
+                    # Activity text
+                    activity_text = f"{icon} {contact_str}: {msg['body'][:30]}..."
+                    
+                    ctk.CTkLabel(
+                        activity_item,
+                        text=activity_text,
+                        font=ctk.CTkFont(size=12),
+                        text_color=color,
+                        anchor="w"
+                    ).pack(fill="x", padx=15, pady=8)
+            else:
+                # No activity
+                ctk.CTkLabel(
+                    self.activity_list,
+                    text="No recent activity",
+                    font=ctk.CTkFont(size=13),
+                    text_color="#667781"
+                ).pack(pady=40)
+                
+        except Exception as e:
+            print(f"Error updating recent activity: {e}")
+            # Show error in UI
+            for widget in self.activity_list.winfo_children():
+                widget.destroy()
+            ctk.CTkLabel(
+                self.activity_list,
+                text=f"Error loading activity: {str(e)[:50]}",
+                font=ctk.CTkFont(size=13),
+                text_color="#F15C6D"
+            ).pack(pady=40)
     
     def convert_whatsapp_id_to_phone(self, whatsapp_id):
         """Convert WhatsApp ID to actual phone number format"""
@@ -1187,22 +1364,14 @@ class MainWindow(ctk.CTk):
     def handle_logout(self):
         """Handle logout"""
         if messagebox.askyesno("Logout", "Are you sure you want to logout?"):
-            # Clear credentials
-            try:
-                import json
-                config_file = os.path.join(
-                    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-                    "config",
-                    "credentials.json"
-                )
-                if os.path.exists(config_file):
-                    os.remove(config_file)
-            except:
-                pass
-            
-            # Close and restart
-            self.destroy()
-            sys.exit(0)
+            # Note: We keep credentials file unchanged so remember checkbox stays as user set it
+            # Call logout callback to return to login window
+            if self.on_logout:
+                self.on_logout()
+            else:
+                # Fallback: destroy and exit
+                self.destroy()
+                sys.exit(0)
     
     def update_status(self, message):
         """Update status bar"""

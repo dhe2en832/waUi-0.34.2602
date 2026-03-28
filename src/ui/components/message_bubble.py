@@ -52,6 +52,11 @@ class MessageBubble(ctk.CTkFrame):
         self._img_label = None
         self._downloading = False
         
+        # Initialize document storage
+        self._document_bytes = None
+        self._document_filename = None
+        self._document_mimetype = None
+        
         self.setup_ui()
         
     def setup_ui(self):
@@ -101,6 +106,9 @@ class MessageBubble(ctk.CTkFrame):
         # Check if message contains base64 image data
         image_data = self._extract_image_data(message_text)
         
+        # Check if message is a document file
+        document_info = self._extract_document_info()
+        
         if image_data and PIL_AVAILABLE:
             # Extract caption from message_data fields (caption is separate from image base64)
             caption = self._extract_caption_from_message()
@@ -125,6 +133,9 @@ class MessageBubble(ctk.CTkFrame):
                     anchor="w"
                 )
                 caption_label.pack(padx=4, pady=(4, 0), anchor="w")
+        elif document_info:
+            # Render document file
+            self._render_document_file(inner_content, document_info, text_color)
         else:
             # Render as text
             text_label = ctk.CTkLabel(
@@ -305,6 +316,252 @@ class MessageBubble(ctk.CTkFrame):
         
         print(f"DEBUG: No caption found in message_data")
         return None
+
+    def _extract_document_info(self):
+        """Extract document file info from message data (PDF, XLS, DOC, etc.)"""
+        # Check if message has media but is not an image
+        has_media = self.message_data.get('hasMedia') or self.message_data.get('_hasMedia')
+        mimetype = self.message_data.get('mimetype', '')
+        filename = self.message_data.get('filename', '')
+        
+        # Also check in _raw data
+        raw = self.message_data.get('_raw', {})
+        if isinstance(raw, dict):
+            data = raw.get('_data', {})
+            if not has_media:
+                has_media = data.get('hasMedia') or data.get('_hasMedia')
+            if not mimetype:
+                mimetype = data.get('mimetype', '')
+            if not filename:
+                filename = data.get('filename', '')
+        
+        if not has_media:
+            return None
+        
+        # Check if it's a document type (not image or video)
+        document_mimetypes = [
+            'application/pdf',
+            'application/msword',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/vnd.ms-excel',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'application/vnd.ms-powerpoint',
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            'text/plain',
+            'text/csv',
+            'application/rtf',
+            'application/vnd.oasis.opendocument.text',
+            'application/vnd.oasis.opendocument.spreadsheet',
+            'application/vnd.oasis.opendocument.presentation',
+            'application/zip',
+            'application/vnd.rar',
+        ]
+        
+        is_document = any(mimetype.startswith(doc_type) for doc_type in document_mimetypes)
+        
+        if not is_document:
+            return None
+        
+        # Get base64 data
+        base64_data = self.message_data.get('base64', '')
+        if not base64_data and isinstance(raw, dict):
+            base64_data = data.get('base64', '')
+        
+        if not base64_data or base64_data == '-' or base64_data == 'disabled':
+            return None
+        
+        # Decode base64
+        try:
+            import base64
+            document_bytes = base64.b64decode(base64_data)
+            
+            # If no filename, generate from mimetype
+            if not filename:
+                ext = mimetype.split('/')[-1] if '/' in mimetype else 'bin'
+                filename = f"document.{ext}"
+            
+            return {
+                'filename': filename,
+                'mimetype': mimetype,
+                'bytes': document_bytes,
+                'size': len(document_bytes)
+            }
+        except Exception as e:
+            print(f"DEBUG: Failed to decode document base64: {e}")
+            return None
+    
+    def _get_document_icon(self, mimetype):
+        """Get icon emoji for document type"""
+        if 'pdf' in mimetype:
+            return "📄"
+        elif 'word' in mimetype or 'document' in mimetype:
+            return "📝"
+        elif 'excel' in mimetype or 'spreadsheet' in mimetype or 'csv' in mimetype:
+            return "📊"
+        elif 'powerpoint' in mimetype or 'presentation' in mimetype:
+            return "📽"
+        elif 'text' in mimetype:
+            return "📃"
+        elif 'zip' in mimetype or 'rar' in mimetype or '7z' in mimetype:
+            return "🗜"
+        else:
+            return "📎"
+    
+    def _format_file_size(self, size_bytes):
+        """Format file size to human readable"""
+        if size_bytes < 1024:
+            return f"{size_bytes} B"
+        elif size_bytes < 1024 * 1024:
+            return f"{size_bytes / 1024:.1f} KB"
+        else:
+            return f"{size_bytes / (1024 * 1024):.1f} MB"
+    
+    def _render_document_file(self, parent, document_info, text_color):
+        """Render document file with icon and download button"""
+        try:
+            # Store document info
+            self._document_bytes = document_info['bytes']
+            self._document_filename = document_info['filename']
+            self._document_mimetype = document_info['mimetype']
+            
+            filename = document_info['filename']
+            mimetype = document_info['mimetype']
+            size = document_info['size']
+            
+            # Get icon for document type
+            icon = self._get_document_icon(mimetype)
+            
+            # Create document container
+            doc_container = ctk.CTkFrame(parent, fg_color="transparent")
+            doc_container.pack(padx=4, pady=(2, 0), anchor="w", fill="x")
+            
+            # Document icon + name frame
+            doc_frame = ctk.CTkFrame(doc_container, fg_color="#F0F0F0", corner_radius=8)
+            doc_frame.pack(padx=4, pady=2, anchor="w")
+            
+            # Icon label
+            icon_label = ctk.CTkLabel(
+                doc_frame,
+                text=icon,
+                font=ctk.CTkFont(size=24)
+            )
+            icon_label.pack(side="left", padx=(8, 4), pady=8)
+            
+            # Info frame (filename + size)
+            info_frame = ctk.CTkFrame(doc_frame, fg_color="transparent")
+            info_frame.pack(side="left", padx=(4, 8), pady=8, fill="both", expand=True)
+            
+            # Filename label
+            name_label = ctk.CTkLabel(
+                info_frame,
+                text=filename,
+                font=ctk.CTkFont(size=13, weight="bold"),
+                text_color=text_color,
+                wraplength=300,
+                justify="left",
+                anchor="w"
+            )
+            name_label.pack(anchor="w")
+            
+            # Size label
+            size_label = ctk.CTkLabel(
+                info_frame,
+                text=self._format_file_size(size),
+                font=ctk.CTkFont(size=11),
+                text_color="#667781"
+            )
+            size_label.pack(anchor="w", pady=(2, 0))
+            
+            # Make the whole frame clickable
+            doc_frame.configure(cursor="hand2")
+            
+            def on_document_click(event):
+                if not self._downloading:
+                    self._download_document()
+            
+            doc_frame.bind("<Button-1>", on_document_click)
+            icon_label.bind("<Button-1>", on_document_click)
+            name_label.bind("<Button-1>", on_document_click)
+            size_label.bind("<Button-1>", on_document_click)
+            
+            # Add download hint
+            hint = ctk.CTkLabel(
+                doc_container,
+                text="👆 Click to download",
+                font=ctk.CTkFont(size=10),
+                text_color="#667781"
+            )
+            hint.pack(padx=4, pady=(0, 2), anchor="w")
+            
+            print(f"DEBUG: Document rendered: {filename} ({self._format_file_size(size)})")
+            
+        except Exception as e:
+            print(f"DEBUG: Failed to render document: {e}")
+            import traceback
+            traceback.print_exc()
+            # Fallback
+            fallback = ctk.CTkLabel(
+                parent,
+                text="📎 Document attached (click to download)",
+                font=ctk.CTkFont(size=14),
+                text_color="#667781"
+            )
+            fallback.pack(padx=4, pady=(2, 0), anchor="w")
+            fallback.configure(cursor="hand2")
+            
+            def on_fallback_click(event):
+                if not self._downloading:
+                    self._download_document()
+            
+            fallback.bind("<Button-1>", on_fallback_click)
+    
+    def _download_document(self):
+        """Download document file when user clicks"""
+        try:
+            if not self._document_bytes:
+                print("DEBUG: No document bytes to download")
+                return
+            
+            from tkinter import filedialog
+            import os
+            
+            # Get original extension from filename
+            original_ext = os.path.splitext(self._document_filename)[1]
+            
+            # Ask user where to save
+            filetypes = [("All files", "*.*")]
+            
+            # Add specific filetype based on mimetype
+            if 'pdf' in self._document_mimetype:
+                filetypes.insert(0, ("PDF files", "*.pdf"))
+            elif 'word' in self._document_mimetype or 'document' in self._document_mimetype:
+                filetypes.insert(0, ("Word files", "*.docx *.doc"))
+            elif 'excel' in self._document_mimetype or 'spreadsheet' in self._document_mimetype:
+                filetypes.insert(0, ("Excel files", "*.xlsx *.xls"))
+            elif 'powerpoint' in self._document_mimetype or 'presentation' in self._document_mimetype:
+                filetypes.insert(0, ("PowerPoint files", "*.pptx *.ppt"))
+            elif 'text' in self._document_mimetype:
+                filetypes.insert(0, ("Text files", "*.txt"))
+            elif 'csv' in self._document_mimetype:
+                filetypes.insert(0, ("CSV files", "*.csv"))
+            
+            file_path = filedialog.asksaveasfilename(
+                defaultextension=original_ext,
+                filetypes=filetypes,
+                title="Save Document",
+                initialfile=self._document_filename
+            )
+            
+            if file_path:
+                # Save document
+                with open(file_path, 'wb') as f:
+                    f.write(self._document_bytes)
+                print(f"DEBUG: Document saved by user to: {file_path}")
+                
+        except Exception as e:
+            print(f"DEBUG: Failed to save document: {e}")
+            import traceback
+            traceback.print_exc()
 
     def _render_image_file(self, parent, image_bytes, text_color):
         """Render actual image and allow user to download on click"""
