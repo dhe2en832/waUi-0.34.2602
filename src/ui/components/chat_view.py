@@ -293,8 +293,8 @@ class ChatView(ctk.CTkFrame):
         bubble = MessageBubble(self.messages_frame, new_message, is_sent=True)
         bubble.pack(fill="x")
         
-        # Scroll to bottom
-        self.messages_frame._parent_canvas.yview_moveto(1.0)
+        # Scroll to bottom after UI update
+        self.after(100, self._scroll_to_bottom)
         
     def attach_media(self):
         """Attach media file - show preview dialog like WhatsApp"""

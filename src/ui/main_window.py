@@ -7,6 +7,8 @@ import customtkinter as ctk
 from tkinter import messagebox
 import sys
 import os
+import threading
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
@@ -37,6 +39,14 @@ class MainWindow(ctk.CTk):
         self.backup_reader = BackupLogReader()
         self.data_source_mode = "current"  # Options: "current", "server_backup", "local_backup"
         
+        # ID to phone number mapping cache for consistent contact matching
+        self.id_to_phone_map = {}
+        
+        # Real-time polling thread
+        self.polling_thread = None
+        self.stop_polling = threading.Event()
+        self.last_message_count = 0
+        
         # Window configuration
         self.title("WACSA-MD2")
         
@@ -63,6 +73,7 @@ class MainWindow(ctk.CTk):
         
         self.setup_ui()
         self.load_initial_data()
+        self.start_realtime_polling()
         
     def setup_ui(self):
         """Setup main UI"""
@@ -380,7 +391,7 @@ class MainWindow(ctk.CTk):
         
         ctk.CTkLabel(
             source_frame,
-            text="📊 Data Source:",
+            text="📊 Data Source: Unified (All Sources)",
             font=ctk.CTkFont(size=14, weight="bold")
         ).pack(anchor="w", padx=20, pady=(10, 5))
         
@@ -544,7 +555,7 @@ class MainWindow(ctk.CTk):
         
         ctk.CTkLabel(
             source_frame,
-            text="📊 Data Source:",
+            text="📊 Data Source: Unified (All Sources)",
             font=ctk.CTkFont(size=14, weight="bold")
         ).pack(anchor="w", padx=20, pady=(10, 5))
         
@@ -638,60 +649,75 @@ class MainWindow(ctk.CTk):
         self.refresh_messages()
     
     def refresh_messages(self):
-        """Refresh messages from selected data source"""
+        """Refresh messages from all unified data sources"""
         try:
-            if self.data_source_mode == "local_backup":
-                # Get messages from local backup files (C:\wacsa\backup)
-                self.update_status("Loading messages from local backup files...")
-                received_data = self.backup_reader.get_received_messages()
-                sent_data = self.backup_reader.get_sent_messages()
-                source = "local backup (C:\\wacsa\\backup)"
-                
-            elif self.data_source_mode == "server_backup":
-                # Get messages from server backup via API
-                self.update_status("Loading messages from server backup...")
-                try:
-                    received_data = self.api_client.get_backup_received_messages()
-                    sent_data = self.api_client.get_backup_sent_messages()
-                    source = "server backup (via API)"
-                except Exception as api_error:
-                    error_msg = str(api_error)
-                    if "404" in error_msg or "Not Found" in error_msg:
-                        raise Exception("Server backup endpoints not available in installed WACSA EXE.\n\n"
-                                      "Solution: Use 'Local Backup' mode instead.")
-                    else:
-                        raise api_error
-                
-            else:  # current
-                # Get messages from current server logs
-                self.update_status("Loading messages from current logs...")
+            self.update_status("Loading messages from all sources...")
+            
+            # Load from all sources and merge
+            all_received = []
+            all_sent = []
+            
+            # 1. Try current logs (API real-time)
+            try:
                 received_data = self.api_client.get_received_messages()
                 sent_data = self.api_client.get_sent_messages()
                 
-                # Check if current logs are empty, fallback to local_backup
                 received_count = self._count_messages(received_data)
                 sent_count = self._count_messages(sent_data)
                 
-                if received_count == 0 and sent_count == 0:
-                    self.update_status("Current logs empty, falling back to local backup...")
-                    received_data = self.backup_reader.get_received_messages()
-                    sent_data = self.backup_reader.get_sent_messages()
-                    source = "local backup (C:\\wacsa\\backup) - fallback"
-                else:
-                    source = "current logs (server API)"
+                if received_count > 0 or sent_count > 0:
+                    all_received.extend(self._extract_messages(received_data))
+                    all_sent.extend(self._extract_messages(sent_data))
+                    print(f"DEBUG: Loaded {received_count} received, {sent_count} sent from current logs")
+            except Exception as e:
+                print(f"DEBUG: Current logs failed: {e}")
+            
+            # 2. Try server backup (API historical)
+            try:
+                received_data = self.api_client.get_backup_received_messages()
+                sent_data = self.api_client.get_backup_sent_messages()
+                
+                received_count = self._count_messages(received_data)
+                sent_count = self._count_messages(sent_data)
+                
+                if received_count > 0 or sent_count > 0:
+                    all_received.extend(self._extract_messages(received_data))
+                    all_sent.extend(self._extract_messages(sent_data))
+                    print(f"DEBUG: Loaded {received_count} received, {sent_count} sent from server backup")
+            except Exception as e:
+                print(f"DEBUG: Server backup failed: {e}")
+            
+            # 3. Try local backup (file)
+            try:
+                received_data = self.backup_reader.get_received_messages()
+                sent_data = self.backup_reader.get_sent_messages()
+                
+                received_count = self._count_messages(received_data)
+                sent_count = self._count_messages(sent_data)
+                
+                if received_count > 0 or sent_count > 0:
+                    all_received.extend(self._extract_messages(received_data))
+                    all_sent.extend(self._extract_messages(sent_data))
+                    print(f"DEBUG: Loaded {received_count} received, {sent_count} sent from local backup")
+            except Exception as e:
+                print(f"DEBUG: Local backup failed: {e}")
+            
+            # Remove duplicates based on message ID
+            all_received = self._deduplicate_messages(all_received)
+            all_sent = self._deduplicate_messages(all_sent)
+            
+            # Create unified data structure
+            received_data = {'status': True, 'response': all_received}
+            sent_data = {'status': True, 'response': all_sent}
+            
+            print(f"DEBUG: Total after dedup: {len(all_received)} received, {len(all_sent)} sent")
             
             # Parse messages and create contacts
-            print(f"DEBUG: received_data type={type(received_data)}, keys={received_data.keys() if isinstance(received_data, dict) else 'N/A'}")
-            print(f"DEBUG: sent_data type={type(sent_data)}, keys={sent_data.keys() if isinstance(sent_data, dict) else 'N/A'}")
             contacts = self.parse_messages_to_contacts(received_data, sent_data)
             print(f"DEBUG: parsed {len(contacts)} contacts")
             
-            # Count total messages for dashboard
-            received_count = self._count_messages(received_data)
-            sent_count = self._count_messages(sent_data)
-            
             # Update dashboard stats
-            self._update_dashboard_stats(sent_count, received_count, len(contacts))
+            self._update_dashboard_stats(len(all_sent), len(all_received), len(contacts))
             
             # Update Recent Activity
             self._update_recent_activity(received_data, sent_data)
@@ -699,11 +725,60 @@ class MainWindow(ctk.CTk):
             # Load into chat list
             self.chat_list.load_contacts(contacts)
             
-            self.update_status(f"✓ Loaded {len(contacts)} conversations from {source}")
+            total_msgs = len(all_received) + len(all_sent)
+            self.update_status(f"✓ Loaded {len(contacts)} conversations ({total_msgs} messages) from all sources")
             
         except Exception as e:
             self.update_status(f"✗ Error: {str(e)}")
             messagebox.showerror("Error", f"Failed to refresh messages:\n\n{str(e)}")
+    
+    def _extract_messages(self, data):
+        """Extract message list from API response"""
+        try:
+            if isinstance(data, dict):
+                if data.get('status') and data.get('response'):
+                    return data['response']
+                elif 'response' in data:
+                    return data['response']
+            elif isinstance(data, list):
+                return data
+        except:
+            pass
+        return []
+    
+    def _deduplicate_messages(self, messages):
+        """Remove duplicate messages based on ID or timestamp+body hash"""
+        seen = set()
+        unique = []
+        
+        for msg in messages:
+            # Try to get unique identifier
+            msg_id = None
+            msg_data = msg.get('_data', msg) if isinstance(msg, dict) else msg
+            
+            if isinstance(msg_data, dict):
+                # Try message ID
+                if 'id' in msg_data:
+                    if isinstance(msg_data['id'], dict):
+                        msg_id = str(msg_data['id'].get('_serialized', msg_data['id']))
+                    else:
+                        msg_id = str(msg_data['id'])
+                
+                # Fallback: use timestamp + body hash
+                if not msg_id:
+                    timestamp = msg_data.get('t', msg_data.get('timestamp', 0))
+                    body = msg_data.get('body', '')
+                    from_field = str(msg_data.get('from', ''))
+                    msg_id = f"{timestamp}_{hash(body + from_field)}"
+            
+            if msg_id and msg_id not in seen:
+                seen.add(msg_id)
+                unique.append(msg)
+            elif not msg_id:
+                # If no ID, include anyway
+                unique.append(msg)
+        
+        return unique
     
     def _count_messages(self, data):
         """Count total messages from API response"""
@@ -964,6 +1039,29 @@ class MainWindow(ctk.CTk):
         except Exception as e:
             return phone_number
     
+    def _normalize_phone_for_matching(self, phone_number):
+        """Normalize phone number for consistent matching across different formats"""
+        if not phone_number or phone_number == "Unknown":
+            return None
+        
+        # Remove all non-digit characters
+        digits = ''.join(filter(str.isdigit, str(phone_number)))
+        
+        # Ensure it starts with 62 (Indonesia)
+        if digits.startswith('0'):
+            digits = '62' + digits[1:]
+        elif not digits.startswith('62'):
+            digits = '62' + digits
+        
+        return digits
+    
+    def _get_contact_key(self, phone_number):
+        """Get normalized key for contact dictionary lookup"""
+        normalized = self._normalize_phone_for_matching(phone_number)
+        if normalized:
+            return normalized
+        return str(phone_number) if phone_number else "Unknown"
+    
     def parse_messages_to_contacts(self, received_data, sent_data):
         """Parse API messages into contact list"""
         contacts_dict = {}
@@ -991,9 +1089,14 @@ class MainWindow(ctk.CTk):
                     
                     # Check 'from' field for actual phone number (not ID)
                     from_field = msg_data.get('from', '')
+                    print(f"DEBUG received: from_field={from_field}, type={type(from_field)}")
                     if isinstance(from_field, str) and '@c.us' in from_field:
                         # This looks like an actual phone number
                         actual_phone = from_field.split('@')[0]
+                    elif isinstance(from_field, str) and '@lid' in from_field:
+                        # WhatsApp Limited Identifier - use as-is but mark for ID-based lookup
+                        actual_phone = from_field.split('@')[0]
+                        print(f"DEBUG received: found @lid ID: {actual_phone}")
                     elif isinstance(from_field, str) and from_field.isdigit() and len(from_field) >= 10:
                         actual_phone = from_field
                     
@@ -1002,6 +1105,9 @@ class MainWindow(ctk.CTk):
                     if isinstance(to_field, str) and '@c.us' in to_field:
                         # This looks like an actual phone number
                         actual_phone = to_field.split('@')[0]
+                    elif isinstance(to_field, str) and '@lid' in to_field:
+                        # WhatsApp Limited Identifier - use as-is
+                        actual_phone = to_field.split('@')[0]
                     elif isinstance(to_field, str) and to_field.isdigit() and len(to_field) >= 10:
                         actual_phone = to_field
                     
@@ -1009,8 +1115,10 @@ class MainWindow(ctk.CTk):
                     if actual_phone:
                         # First check if it's a WhatsApp ID that needs mapping
                         phone_number = self.convert_whatsapp_id_to_phone(actual_phone)
+                        print(f"DEBUG received: actual_phone={actual_phone}, converted_phone={phone_number}")
                         # Get actual conversation partner (not server number)
                         conversation_partner = self.get_conversation_partner(msg_data, phone_number)
+                        print(f"DEBUG received: conversation_partner={conversation_partner}")
                         if conversation_partner != phone_number:
                             phone_number = conversation_partner
                         sender = phone_number
@@ -1045,7 +1153,16 @@ class MainWindow(ctk.CTk):
                         phone_number = "Unknown"
                         sender = "Unknown"
                     
-                    if phone_number not in contacts_dict:
+                    # Cache the ID-to-phone mapping for consistent lookup
+                    # This helps match sent and received messages for the same contact
+                    if actual_phone and actual_phone != phone_number:
+                        self.id_to_phone_map[actual_phone] = phone_number
+                        print(f"DEBUG: Cached ID mapping {actual_phone} -> {phone_number}")
+                    
+                    # Normalize phone number for consistent matching
+                    phone_key = self._get_contact_key(phone_number)
+                    
+                    if phone_key not in contacts_dict:
                         # Get display name from notifyName or use phone number
                         notify_name = msg_data.get('notifyName', '')
                         if notify_name and notify_name != phone_number:
@@ -1054,7 +1171,7 @@ class MainWindow(ctk.CTk):
                             # Use phone number as display name
                             display_name = phone_number
                         
-                        contacts_dict[phone_number] = {
+                        contacts_dict[phone_key] = {
                             'number': phone_number,
                             'name': display_name,
                             'messages': [],
@@ -1064,28 +1181,28 @@ class MainWindow(ctk.CTk):
                         }
                     else:
                         # Update display name if we find a better one (prefer actual names over phone numbers)
-                        current_name = contacts_dict[phone_number]['name']
+                        current_name = contacts_dict[phone_key]['name']
                         notify_name = msg_data.get('notifyName', '')
                         if notify_name and notify_name != phone_number:
                             # If current name is just a phone number and we found a real name, update it
                             if current_name.replace('+', '').replace(' ', '').replace('-', '').isdigit():
-                                contacts_dict[phone_number]['name'] = notify_name
+                                contacts_dict[phone_key]['name'] = notify_name
                     
-                    contacts_dict[phone_number]['messages'].append(msg)
+                    contacts_dict[phone_key]['messages'].append(msg)
                     body = msg_data.get('body', 'Media')
                     if body and len(body) > 50:
                         body = body[:50] + '...'
-                    contacts_dict[phone_number]['last_message'] = body
+                    contacts_dict[phone_key]['last_message'] = body
                     
                     # Update last message time only if this message is newer
                     msg_time = msg_data.get('t', msg_data.get('timestamp', ''))
                     if msg_time:
-                        current_time = contacts_dict[phone_number].get('last_message_time', '0')
+                        current_time = contacts_dict[phone_key].get('last_message_time', '0')
                         try:
                             if int(str(msg_time)) > int(str(current_time)):
-                                contacts_dict[phone_number]['last_message_time'] = str(msg_time)
+                                contacts_dict[phone_key]['last_message_time'] = str(msg_time)
                         except:
-                            contacts_dict[phone_number]['last_message_time'] = str(msg_time)
+                            contacts_dict[phone_key]['last_message_time'] = str(msg_time)
                     
                 except Exception as e:
                     print(f"Error parsing received message: {e}")
@@ -1128,6 +1245,9 @@ class MainWindow(ctk.CTk):
                     elif isinstance(to_field, str) and '@c.us' in to_field:
                         # This looks like an actual phone number
                         actual_phone = to_field.split('@')[0]
+                    elif isinstance(to_field, str) and '@lid' in to_field:
+                        # WhatsApp Limited Identifier - use as-is
+                        actual_phone = to_field.split('@')[0]
                     elif isinstance(to_field, str) and to_field.isdigit() and len(to_field) >= 10:
                         actual_phone = to_field
                     
@@ -1136,16 +1256,27 @@ class MainWindow(ctk.CTk):
                     if isinstance(from_field, str) and '@c.us' in from_field:
                         # This looks like an actual phone number
                         actual_phone = from_field.split('@')[0]
+                    elif isinstance(from_field, str) and '@lid' in from_field:
+                        # WhatsApp Limited Identifier - use as-is
+                        actual_phone = from_field.split('@')[0]
                     elif isinstance(from_field, str) and from_field.isdigit() and len(from_field) >= 10:
                         actual_phone = from_field
                     
                     # If we found actual phone number, use it
                     if actual_phone:
-                        # First check if it's a WhatsApp ID that needs mapping
-                        temp_phone = self.convert_whatsapp_id_to_phone(actual_phone)
-                        # Get actual conversation partner (not server number)
-                        conversation_partner = self.get_conversation_partner(msg_data, temp_phone)
-                        phone_number = conversation_partner if conversation_partner != temp_phone else temp_phone
+                        # For LID-based numbers, use direct conversion without partner lookup
+                        if len(actual_phone) >= 14 and not actual_phone.startswith('0') and not actual_phone.startswith('62'):
+                            # This looks like a WhatsApp LID, convert directly
+                            phone_number = self.convert_whatsapp_id_to_phone(actual_phone)
+                            print(f"DEBUG sent: LID direct conversion: {actual_phone} -> {phone_number}")
+                        else:
+                            # Regular phone number processing
+                            temp_phone = self.convert_whatsapp_id_to_phone(actual_phone)
+                            print(f"DEBUG sent: actual_phone={actual_phone}, converted_phone={temp_phone}")
+                            # Get actual conversation partner (not server number)
+                            conversation_partner = self.get_conversation_partner(msg_data, temp_phone)
+                            print(f"DEBUG sent: conversation_partner={conversation_partner}")
+                            phone_number = conversation_partner if conversation_partner != temp_phone else temp_phone
                         recipient = phone_number
                     else:
                         # Fallback to ID-based conversion
@@ -1178,13 +1309,28 @@ class MainWindow(ctk.CTk):
                         phone_number = "Unknown"
                         recipient = "Unknown"
                     
-                    if phone_number not in contacts_dict:
+                    # Check if we have a cached mapping for this ID
+                    # This ensures sent messages match with received messages from same contact
+                    if actual_phone and actual_phone in self.id_to_phone_map:
+                        cached_phone = self.id_to_phone_map[actual_phone]
+                        if cached_phone != phone_number:
+                            print(f"DEBUG: Using cached mapping for sent: {actual_phone} -> {cached_phone}")
+                            phone_number = cached_phone
+                    
+                    # Also cache this mapping for future use
+                    if actual_phone and phone_number not in ["Unknown", actual_phone]:
+                        self.id_to_phone_map[actual_phone] = phone_number
+                    
+                    # Normalize phone number for consistent matching
+                    phone_key = self._get_contact_key(phone_number)
+                    
+                    if phone_key not in contacts_dict:
                         # Get display name from notifyName or use phone number
                         display_name = msg_data.get('notifyName', phone_number)
                         if display_name == phone_number and '@' in phone_number:
                             display_name = phone_number.split('@')[0]
                         
-                        contacts_dict[phone_number] = {
+                        contacts_dict[phone_key] = {
                             'number': phone_number,
                             'name': display_name,
                             'messages': [],
@@ -1194,28 +1340,28 @@ class MainWindow(ctk.CTk):
                         }
                     
                     # Update display name for sent messages too
-                    current_name = contacts_dict[phone_number]['name']
+                    current_name = contacts_dict[phone_key]['name']
                     notify_name = msg_data.get('notifyName', '')
                     if notify_name and notify_name != phone_number:
                         # If current name is just a phone number and we found a real name, update it
                         if current_name.replace('+', '').replace(' ', '').replace('-', '').isdigit():
-                            contacts_dict[phone_number]['name'] = notify_name
+                            contacts_dict[phone_key]['name'] = notify_name
                     
-                    contacts_dict[phone_number]['messages'].append(msg)
+                    contacts_dict[phone_key]['messages'].append(msg)
                     body = msg_data.get('body', 'Media')
                     if body and len(body) > 50:
                         body = body[:50] + '...'
-                    contacts_dict[phone_number]['last_message'] = body
+                    contacts_dict[phone_key]['last_message'] = body
                     
                     # Update last message time only if this message is newer
                     msg_time = msg_data.get('t', msg_data.get('timestamp', ''))
                     if msg_time:
-                        current_time = contacts_dict[phone_number].get('last_message_time', '0')
+                        current_time = contacts_dict[phone_key].get('last_message_time', '0')
                         try:
                             if int(str(msg_time)) > int(str(current_time)):
-                                contacts_dict[phone_number]['last_message_time'] = str(msg_time)
+                                contacts_dict[phone_key]['last_message_time'] = str(msg_time)
                         except:
-                            contacts_dict[phone_number]['last_message_time'] = str(msg_time)
+                            contacts_dict[phone_key]['last_message_time'] = str(msg_time)
                     
                 except Exception as e:
                     print(f"Error parsing sent message: {e}")
@@ -1376,3 +1522,55 @@ class MainWindow(ctk.CTk):
     def update_status(self, message):
         """Update status bar"""
         self.status_label.configure(text=message)
+    
+    def start_realtime_polling(self):
+        """Start background thread for real-time message polling"""
+        if self.polling_thread and self.polling_thread.is_alive():
+            return
+        
+        self.stop_polling.clear()
+        self.polling_thread = threading.Thread(target=self._polling_loop, daemon=True)
+        self.polling_thread.start()
+        print("DEBUG: Real-time polling started")
+    
+    def stop_realtime_polling(self):
+        """Stop the polling thread"""
+        self.stop_polling.set()
+        if self.polling_thread:
+            self.polling_thread.join(timeout=1)
+    
+    def _polling_loop(self):
+        """Background thread that polls for new messages every 3 seconds"""
+        while not self.stop_polling.is_set():
+            try:
+                time.sleep(3)  # Poll every 3 seconds
+                
+                if self.stop_polling.is_set():
+                    break
+                
+                # Use after() to safely update UI from background thread
+                self.after(0, self._check_for_new_messages)
+                
+            except Exception as e:
+                print(f"DEBUG: Polling error: {e}")
+    
+    def _check_for_new_messages(self):
+        """Check for new messages and refresh if needed (called in main thread)"""
+        try:
+            # Quick check for new messages from current API only
+            received_data = self.api_client.get_received_messages()
+            sent_data = self.api_client.get_sent_messages()
+            
+            current_count = self._count_messages(received_data) + self._count_messages(sent_data)
+            
+            # If message count changed, do full refresh
+            if current_count != self.last_message_count:
+                if self.last_message_count > 0:
+                    print(f"DEBUG: New messages detected ({self.last_message_count} -> {current_count}), refreshing...")
+                    self.update_status(f"📩 {current_count - self.last_message_count} new message(s) received")
+                    self.refresh_messages()
+                self.last_message_count = current_count
+            
+        except Exception as e:
+            # Silently fail - don't show errors during polling
+            print(f"DEBUG: Check messages error: {e}")
